@@ -31,7 +31,8 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Towns on JourneyMap: one outlined polygon per town (its nation's colour, its name as label), and besieged or occupied
+ * Towns on JourneyMap: one outlined polygon per town (its nation's colour, its name as label; a managed nation's land darker
+ * with a thick border in its colour), and besieged or occupied
  * chunks on top in the besieger's colour. Rebuilt at most once a second after the claims, briefs or sieges change.
  * JourneyMap finds this class by its annotation, so nothing loads it without JourneyMap.
  */
@@ -84,9 +85,13 @@ public final class NWJourneyMapPlugin implements IClientPlugin {
             for (var e : byTown.entrySet()) {
                 Briefs.TownBrief town = ClientClaims.town(e.getKey());
                 if (town == null) continue;
-                int color = ClientClaims.mapColor(town);
-                ShapeProperties shape = new ShapeProperties().setFillColor(color).setFillOpacity(MapStyle.fillOpacity())
-                        .setStrokeColor(color).setStrokeOpacity(0.9f).setStrokeWidth(2f);
+                boolean managed = MapStyle.managed(town);
+                int color = MapStyle.base(town);
+                ShapeProperties shape = managed
+                        ? new ShapeProperties().setFillColor(color).setFillOpacity(MapStyle.managedOpacity()).setStrokeColor(MapStyle.accent(town))
+                        .setStrokeOpacity(1f).setStrokeWidth(3f)
+                        : new ShapeProperties().setFillColor(color).setFillOpacity(MapStyle.fillOpacity()).setStrokeColor(color).setStrokeOpacity(0.9f)
+                        .setStrokeWidth(2f);
                 for (MapPolygonWithHoles poly : PolygonHelper.createChunksPolygon(e.getValue(), 70)) {
                     PolygonOverlay o = new PolygonOverlay(getModId(), key, shape, poly);
                     o.setOverlayGroupName("towns").setTitle(MapStyle.label(town));

@@ -2,6 +2,7 @@ plugins {
     id 'eclipse'
     id 'idea'
     id 'net.neoforged.gradle.userdev' version '[7.0.59,7.2)'
+    id 'maven-publish'
 }
 
 group = mod_group_id
@@ -13,6 +14,7 @@ base {
 
 java {
     toolchain.languageVersion = JavaLanguageVersion.of(21)
+    withSourcesJar()
 }
 
 runs {
@@ -147,4 +149,15 @@ tasks.named('jar', Jar).configure {
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
+}
+
+// Other mods compile against the API (org.papiricoh:nationsandwar:<version>): ./gradlew publishToMavenLocal, or copy
+// build/libs/nationsandwar_<mc>_<version>.jar (see docs/API.md).
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            artifactId = mod_id
+            from components.java
+        }
+    }
 }

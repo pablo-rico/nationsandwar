@@ -3,11 +3,12 @@ package org.papiricoh.nationsandwar.client.screen.tab;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.network.chat.Component;
+import org.papiricoh.nationsandwar.client.ClientClaims;
 import org.papiricoh.nationsandwar.client.gui.Draw;
 import org.papiricoh.nationsandwar.client.gui.Ui;
 import org.papiricoh.nationsandwar.client.screen.NationScreen;
-import org.papiricoh.nationsandwar.model.GovernmentType;
 import org.papiricoh.nationsandwar.model.Perm;
+import org.papiricoh.nationsandwar.view.Briefs;
 import org.papiricoh.nationsandwar.view.PoliticsView;
 
 import java.util.ArrayList;
@@ -18,11 +19,14 @@ import java.util.UUID;
 /**
  * Every nation with its relation to mine and, for NPC nations, their opinion of us; alliance invite / kick and the
  * declare-war button per row (left). My alliance, or the form to create one and the invitations to join one (right).
+ * A nation run by another mod has no buttons: picking its row shows its card ({@link Tab#managedCard}) on the right.
  */
 public final class DiplomacyTab extends Tab {
     private EditBox allianceName;
     private final Ui.Scroll list = new Ui.Scroll();
-    private UUID armed;
+    private UUID armed, picked;
+    /** A managed nation's provider key to pick once its row shows up (the preview harness). */
+    private String pickKey;
 
     public DiplomacyTab(NationScreen screen) {
         super(screen);
@@ -62,11 +66,28 @@ public final class DiplomacyTab extends Tab {
         g.fill(mid, oy - 1, mid + 1, oy + 6, 0xFF8C95A7);
     }
 
+    /** Picks the first nation run by {@code key} as soon as it is known. */
+    public void pickManaged(String key) {
+        pickKey = key;
+    }
+
     @Override
     public void render(GuiGraphics g, PoliticsView v, float partial) {
+        if (pickKey != null)
+            for (Briefs.NationBrief b : ClientClaims.nations())
+                if (pickKey.equals(b.managedBy())) {
+                    picked = b.id();
+                    pickKey = null;
+                    break;
+                }
         int rw = Math.min(140, w / 3), lw = w - rw - 10;
         nations(g, v, x + 2, y + 2, lw);
-        alliance(g, v, x + lw + 8, y + 2, rw);
+        Briefs.NationBrief card = picked == null ? null : ClientClaims.nation(picked);
+        if (card != null && card.managed()) {
+            int cx = x + lw + 8, ch = Math.min(h - 8, 200);
+            managedCard(g, card, cx, y + 4, rw - 3, ch);
+            ui.button(g, cx + rw - 18, y + 7, 12, 11, Component.literal("✕"), Ui.Style.NORMAL, null, () -> picked = null);
+        } else alliance(g, v, x + lw + 8, y + 2, rw);
     }
 
     private void nations(GuiGraphics g, PoliticsView v, int lx, int ly, int lw) {
@@ -84,21 +105,27 @@ public final class DiplomacyTab extends Tab {
         int ry = top + 2 - list.offset;
         PoliticsView.AllianceView myAlliance = v.alliance();
         for (PoliticsView.NationSummary n : all) {
-            boolean self = "self".equals(n.relation());
+            boolean self = "self".equals(n.relation()), managed = ClientClaims.managed(n.id());
             g.fill(lx + 2, ry, lx + lw - 2, ry + 24, self ? 0x30E3B556 : 0x18FFFFFF);
+            if (managed) {
+                UUID id = n.id();
+                ui.row(g, lx + 2, ry, lw - 4, 24, id.equals(picked), () -> picked = id.equals(picked) ? null : id);
+                ui.tip(lx + 2, ry, lw - 4, 24, Component.translatable("nationsandwar.managed.inspect"));
+            }
             g.fillGradient(lx + 2, ry, lx + 6, ry + 24, Draw.opaque(Draw.mix(n.color(), 0xFFFFFF, 0.2f)), Draw.opaque(Draw.shade(n.color(), 0.7f)));
-            Component name = Component.literal(n.name() + (n.npc() ? " ⚙" : ""));
+            Component name = Component.literal(n.name() + (n.npc() && !managed ? " ⚙" : ""));
             g.drawString(font, Draw.fit(font, name, lw - 150), lx + 10, ry + 3, Draw.TEXT, false);
-            Component sub = Component.translatable(GovernmentType.byId(n.government()).key()).append(" · ")
-                    .append(tr("towns_citizens", n.towns(), n.citizens())).append(" · " + n.leader());
+            Component sub = managed ? government(n.id(), n.government()).copy().append(" · ").append(tr("n_towns", n.towns()))
+                    : government(n.id(), n.government()).copy().append(" · ").append(tr("towns_citizens", n.towns(), n.citizens())).append(" · " + n.leader());
             Draw.text(g, font, Draw.fit(font, sub, (int) ((lw - 150) / 0.7f)), lx + 10, ry + 14, 0.7f, Draw.MUTED, false);
             int cx = lx + lw - 140;
             ui.chip(g, cx, ry + 2, tr("relation." + n.relation()), relationColor(n.relation()));
-            if (n.npc() && !self) {
+            if (n.npc() && !self && !managed) {
                 opinion(g, cx, ry + 16, 40, n.opinion());
                 ui.tip(cx, ry + 14, 40, 9, tr("opinion", n.opinion()));
             }
-            if (mine != null && !self) {
+            if (managed) managedBadge(g, lx + lw - 92, ry + 7);
+            else if (mine != null && !self) {
                 int bx = lx + lw - 92;
                 boolean member = myAlliance != null && myAlliance.members().contains(n.id());
                 if (member) {

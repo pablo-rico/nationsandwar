@@ -7,11 +7,14 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
+import org.papiricoh.nationsandwar.api.client.ManagedNationScreens;
+import org.papiricoh.nationsandwar.client.ClientClaims;
 import org.papiricoh.nationsandwar.client.ClientPolitics;
 import org.papiricoh.nationsandwar.client.gui.Draw;
 import org.papiricoh.nationsandwar.client.gui.Ui;
 import org.papiricoh.nationsandwar.client.screen.NationScreen;
 import org.papiricoh.nationsandwar.model.Perm;
+import org.papiricoh.nationsandwar.view.Briefs;
 import org.papiricoh.nationsandwar.view.PoliticsView;
 
 import java.util.List;
@@ -201,12 +204,67 @@ public abstract class Tab {
 
     protected static String nationName(PoliticsView v, UUID id) {
         PoliticsView.NationSummary n = id == null ? null : v.nationSummary(id);
-        return n == null ? "?" : n.name();
+        Briefs.NationBrief b = n == null && id != null ? ClientClaims.nation(id) : null;
+        return n != null ? n.name() : b != null ? b.name() : "?";
     }
 
     protected static int nationColor(PoliticsView v, UUID id) {
         PoliticsView.NationSummary n = id == null ? null : v.nationSummary(id);
-        return n == null ? 0x888888 : n.color();
+        Briefs.NationBrief b = n == null && id != null ? ClientClaims.nation(id) : null;
+        return n != null ? n.color() : b != null ? b.color() : 0x888888;
+    }
+
+    /** A nation's government noun ("Kingdom"): the managing mod's titles for a managed nation. */
+    protected static Component government(UUID nation, String government) {
+        return Component.translatable(ClientClaims.titles(nation, government));
+    }
+
+    /** The "Managed" pill of a nation run by another mod; returns its width. */
+    protected int managedBadge(GuiGraphics g, int bx, int by) {
+        return ui.chip(g, bx, by, Component.translatable("nationsandwar.managed.badge"), Draw.MANAGED);
+    }
+
+    /**
+     * The card of a nation run by another mod, shown instead of its details: its colour and emblem, the handler's title,
+     * text and the badge, and one button (enabled when the handler's {@code canOpen}) that hands the viewer over to that mod.
+     * With no handler: the generic text and no button.
+     */
+    protected void managedCard(GuiGraphics g, Briefs.NationBrief n, int cx, int cy, int cw, int ch) {
+        ManagedNationScreens.Handler handler = ManagedNationScreens.handler(n.managedBy());
+        int color = Draw.opaque(n.color()), light = Draw.mix(color, 0xFFFFFFFF, 0.35f), mid = cx + cw / 2;
+        Draw.shadow(g, cx, cy, cw, ch, 6);
+        Draw.slab(g, cx, cy, cw, ch, 3, 0xFF29313E, 0xFF1C222B);
+        g.fill(cx, cy, cx + cw, cy + 2, color);
+        int ew = 28, eh = 30, ex = mid - ew / 2, ey = cy + 10;
+        Draw.shadow(g, ex, ey, ew, eh + 8, 4);
+        g.fillGradient(ex, ey, ex + ew, ey + eh, Draw.mix(color, 0xFFFFFFFF, 0.15f), Draw.shade(color, 0.6f));
+        Draw.quad(g, ex, ey + eh, ex + ew, ey + eh, mid, ey + eh + 9, mid, ey + eh + 9, Draw.shade(color, 0.6f));
+        Draw.hatch(g, ex, ey, ew, 0x30000000, 0);
+        Draw.frame(g, ex, ey, ew, eh, Draw.shade(color, 0.4f));
+        Draw.icon(g, Draw.Icon.NATION, ex + 6, ey + 7);
+        int ty = ey + eh + 15;
+        Component title = handler == null ? Component.literal(n.name()) : handler.title(n);
+        g.drawCenteredString(font, Draw.fit(font, title, cw - 10), mid, ty, light);
+        ty += 11;
+        if (!n.titles().isEmpty()) {
+            Component noun = Draw.fit(font, Component.translatable(n.titles()), (int) ((cw - 10) / 0.75f));
+            Draw.text(g, font, noun, mid - font.width(noun) * 0.75f / 2, ty, 0.75f, Draw.MUTED, false);
+            ty += 10;
+        }
+        Component badge = Component.translatable("nationsandwar.managed.badge");
+        ui.chip(g, mid - (font.width(badge) + 6) / 2, ty, badge, Draw.MANAGED);
+        ty += 16;
+        int buttonY = cy + ch - 19, bottom = handler == null ? cy + ch - 6 : buttonY - 4;
+        Component text = handler == null ? Component.translatable("nationsandwar.managed.description") : handler.description(n);
+        for (var line : font.split(text, cw - 12)) {
+            if (ty + 9 > bottom) break;
+            g.drawString(font, line, mid - font.width(line) / 2, ty, Draw.MUTED, false);
+            ty += 10;
+        }
+        if (handler == null) return;
+        var player = net.minecraft.client.Minecraft.getInstance().player;
+        Component denied = player != null && handler.canOpen(player, n) ? null : handler.cannotOpen(n);
+        ui.button(g, cx + 6, buttonY, cw - 12, 13, handler.button(n), Ui.Style.GOLD, denied, () -> handler.open(player, n));
     }
 
     protected static String townName(PoliticsView v, UUID id) {

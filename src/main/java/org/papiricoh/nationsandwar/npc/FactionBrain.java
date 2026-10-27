@@ -47,12 +47,12 @@ public final class FactionBrain {
         return false;
     }
 
-    /** Moves every NPC nation's opinions by one interval. */
+    /** Moves every NPC nation's opinions by one interval (never of a managed nation: another mod runs those). */
     public static void drift(Politics pol, Collection<War> wars, long day) {
         for (Nation n : pol.nations.values()) {
             if (!n.npc) continue;
             for (Nation m : pol.nations.values()) {
-                if (m == n) continue;
+                if (m == n || m.managed()) continue;
                 int delta = 0;
                 if (pol.allied(n.id, m.id)) delta += 3;
                 if (atWar(wars, n.id, m.id)) delta -= 2;
@@ -84,7 +84,7 @@ public final class FactionBrain {
             }
             Nation worst = null, best = null;
             for (Nation m : pol.nations.values()) {
-                if (m == n || pol.allied(n.id, m.id)) continue;
+                if (m == n || m.managed() || pol.allied(n.id, m.id)) continue;
                 int o = n.opinionOf(m.id);
                 if (o <= WAR_BELOW && (worst == null || o < n.opinionOf(worst.id))) worst = m;
                 if (m.npc && n.alliance == null && o >= ALLY_ABOVE && m.opinionOf(n.id) >= ALLY_ABOVE && (best == null || o > n.opinionOf(best.id))) best = m;

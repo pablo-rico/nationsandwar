@@ -48,9 +48,10 @@ public final class WarRules {
         return attackers == defenders ? War.Outcome.WHITE_PEACE : attackers > defenders ? War.Outcome.ATTACKERS : War.Outcome.DEFENDERS;
     }
 
-    /** The outcome if the war should end now (target reached or deadline passed), else NONE. */
+    /** The outcome if the war should end now (target reached or deadline passed), else NONE. The war's own target wins. */
     public static War.Outcome check(War w, int target, long now) {
         if (w.phase != War.Phase.ACTIVE) return War.Outcome.NONE;
+        if (w.targetScore > 0) target = w.targetScore;
         if (w.scoreAttackers >= target) return War.Outcome.ATTACKERS;
         if (w.scoreDefenders >= target) return War.Outcome.DEFENDERS;
         return now >= w.deadline ? byScore(w.scoreAttackers, w.scoreDefenders) : War.Outcome.NONE;

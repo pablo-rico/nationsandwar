@@ -197,6 +197,18 @@ public final class ClientClaims {
         return n != null ? n.color() : t.color();
     }
 
+    /** Whether a nation is run by another mod ({@code api.ManagedNations}). */
+    public static boolean managed(UUID nation) {
+        Briefs.NationBrief n = nation(nation);
+        return n != null && n.managed();
+    }
+
+    /** The lang prefix of a nation's government names: the managing mod's titles, else {@code nationsandwar.gov.<id>}. */
+    public static String titles(UUID nation, String government) {
+        Briefs.NationBrief n = nation(nation);
+        return n != null && !n.titles().isEmpty() ? n.titles() : "nationsandwar.gov." + government;
+    }
+
     // --- listeners ---------------------------------------------------------------------------------------------------------
 
     public static void listen(java.util.function.Consumer<Change> listener) {

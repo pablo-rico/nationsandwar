@@ -17,9 +17,14 @@ public record Briefs(List<TownBrief> towns, List<ProvinceBrief> provinces, List<
                      List<WarBrief> wars) {
 
     /**
-     * @param flags bit per {@code model.Flag} ordinal that is on town-wide
+     * @param flags     bit per {@code model.Flag} ordinal that is on town-wide
+     * @param managedBy the key of the mod that runs the town ({@code api.ManagedNations}), "" for an ordinary or NPC town
      */
-    public record TownBrief(UUID id, String name, int color, UUID nation, UUID province, int flags, boolean npc, String mayor) {
+    public record TownBrief(UUID id, String name, int color, UUID nation, UUID province, int flags, boolean npc, String mayor, String managedBy) {
+        public boolean managed() {
+            return !managedBy.isEmpty();
+        }
+
         CompoundTag write() {
             CompoundTag t = new CompoundTag();
             t.putUUID("id", id);
@@ -30,12 +35,13 @@ public record Briefs(List<TownBrief> towns, List<ProvinceBrief> provinces, List<
             t.putInt("flags", flags);
             t.putBoolean("npc", npc);
             t.putString("mayor", mayor);
+            t.putString("managedBy", managedBy);
             return t;
         }
 
         static TownBrief read(CompoundTag t) {
             return new TownBrief(t.getUUID("id"), t.getString("name"), t.getInt("color"), Nbt.getUuid(t, "nation"), Nbt.getUuid(t, "province"),
-                    t.getInt("flags"), t.getBoolean("npc"), t.getString("mayor"));
+                    t.getInt("flags"), t.getBoolean("npc"), t.getString("mayor"), t.getString("managedBy"));
         }
     }
 
@@ -53,8 +59,18 @@ public record Briefs(List<TownBrief> towns, List<ProvinceBrief> provinces, List<
         }
     }
 
-    /** {@code government} is a {@code GovernmentType} id ("kingdom"…). */
-    public record NationBrief(UUID id, String name, int color, String government, UUID alliance, UUID capital, boolean npc, String leader) {
+    /**
+     * @param government a {@code GovernmentType} id ("kingdom"…)
+     * @param managedBy  the key of the mod that runs the nation, "" for an ordinary or NPC nation
+     * @param titles     the lang prefix of its government's names: {@code nationsandwar.gov.<id>}, or the managing mod's
+     *                   ("supernaturalcraft.gov.pit"); the noun is the prefix itself, the ranks {@code <prefix>.leader}…
+     */
+    public record NationBrief(UUID id, String name, int color, String government, UUID alliance, UUID capital, boolean npc, String leader,
+                              String managedBy, String titles) {
+        public boolean managed() {
+            return !managedBy.isEmpty();
+        }
+
         CompoundTag write() {
             CompoundTag t = new CompoundTag();
             t.putUUID("id", id);
@@ -65,12 +81,14 @@ public record Briefs(List<TownBrief> towns, List<ProvinceBrief> provinces, List<
             Nbt.putUuid(t, "capital", capital);
             t.putBoolean("npc", npc);
             t.putString("leader", leader);
+            t.putString("managedBy", managedBy);
+            t.putString("titles", titles);
             return t;
         }
 
         static NationBrief read(CompoundTag t) {
             return new NationBrief(t.getUUID("id"), t.getString("name"), t.getInt("color"), t.getString("gov"), Nbt.getUuid(t, "alliance"),
-                    Nbt.getUuid(t, "capital"), t.getBoolean("npc"), t.getString("leader"));
+                    Nbt.getUuid(t, "capital"), t.getBoolean("npc"), t.getString("leader"), t.getString("managedBy"), t.getString("titles"));
         }
     }
 

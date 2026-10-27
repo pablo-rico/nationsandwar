@@ -17,7 +17,7 @@ import org.papiricoh.nationsandwar.NationsAndWar;
 public final class Draw {
     public static final int DIM = 0xB0080A0E, PANEL = 0xFF1A1F28, PANEL_HI = 0xFF232A35, INSET = 0xFF12161C, EDGE = 0xFF343E4F,
             EDGE_HI = 0xFF56647D, TEXT = 0xFFEAE4D4, MUTED = 0xFF8C95A7, GOLD = 0xFFE3B556, GOOD = 0xFF6FD08A, BAD = 0xFFE5646A,
-            WARN = 0xFFE8A93C, INFO = 0xFF7FB2F0;
+            WARN = 0xFFE8A93C, INFO = 0xFF7FB2F0, MANAGED = 0xFFB48CE6;
     public static final ResourceLocation ICONS = NationsAndWar.id("textures/gui/icons.png");
 
     /** The cells of {@code textures/gui/icons.png}, in order (see {@code tools/artgen/guiart.py}). */

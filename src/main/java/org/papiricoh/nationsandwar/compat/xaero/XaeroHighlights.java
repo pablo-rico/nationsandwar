@@ -49,7 +49,7 @@ public final class XaeroHighlights {
             Briefs.TownBrief t = ClientClaims.town(e.getValue());
             int color = t == null ? 0 : MapStyle.fill(dim, t, c);
             h = 31 * h + Long.hashCode(c) * 7 + e.getValue().hashCode() + color + MapStyle.state(dim, t == null ? new Briefs.TownBrief(e.getValue(),
-                    "", 0, null, null, 0, false, "") : t, c).ordinal();
+                    "", 0, null, null, 0, false, "", "") : t, c).ordinal();
         }
         return h;
     }
@@ -67,10 +67,17 @@ public final class XaeroHighlights {
         int fillA = Math.round(MapStyle.fillOpacity() * 255), edgeA = Math.min(255, fillA + 120);
         boolean n = MapStyle.edge(claims, id, cx, cz, 0, -1), s = MapStyle.edge(claims, id, cx, cz, 0, 1),
                 w = MapStyle.edge(claims, id, cx, cz, -1, 0), e = MapStyle.edge(claims, id, cx, cz, 1, 0);
+        boolean managed = state == MapStyle.State.NORMAL && MapStyle.managed(town);
+        int accent = managed ? MapStyle.accent(town) : rgb;
+        if (managed) fillA = Math.round(MapStyle.managedOpacity() * 255);
         for (int z = 0; z < 16; z++) {
             for (int x = 0; x < 16; x++) {
                 boolean border = n && z == 0 || s && z == 15 || w && x == 0 || e && x == 15;
                 boolean stripe = state != MapStyle.State.NORMAL && ((x + z) & 3) < 2;
+                if (managed && (border || MapStyle.hatch(x, z))) {
+                    out[z << 4 | x] = bgra(accent, edgeA);
+                    continue;
+                }
                 int a = border ? edgeA : stripe ? Math.min(255, fillA + 70) : fillA;
                 int c = stripe && state == MapStyle.State.OCCUPIED ? 0x601010 : rgb;
                 out[z << 4 | x] = bgra(c, a);
@@ -89,6 +96,8 @@ public final class XaeroHighlights {
         if (town == null) return null;
         SiegeBrief siege = ClientClaims.siegeAt(dim, ChunkPos.asLong(cx, cz));
         Component c = Component.literal(MapStyle.label(town)).withStyle(st -> st.withColor(ClientClaims.mapColor(town)));
+        if (MapStyle.managed(town)) c = c.copy().append(Component.literal(" · ").append(Component.translatable("nationsandwar.managed.badge"))
+                .withStyle(net.minecraft.ChatFormatting.LIGHT_PURPLE));
         if (siege != null) c = c.copy().append(Component.translatable("nationsandwar.map.besieged", siege.besieger(),
                 Math.round((siege.control() + 1) * 50)).withStyle(net.minecraft.ChatFormatting.RED));
         return c;

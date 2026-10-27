@@ -41,6 +41,10 @@ public final class War {
     /** The side that offered white peace (null: nobody). */
     public Boolean peaceOfferedByAttackers;
     public Treaty terms;
+    /** The score that wins this war (0: the config's). Set by {@code api.WarApi.WarOptions}. */
+    public int targetScore;
+    /** A lang key naming why the war was declared (shown by the GUI and notices; "" for an ordinary war). */
+    public String reason = "";
     private int nextSiege = 1;
 
     public War(UUID id, UUID attacker, UUID defender) {
@@ -129,6 +133,8 @@ public final class War {
         if (peaceOfferedByAttackers != null) t.putBoolean("peaceBy", peaceOfferedByAttackers);
         if (terms != null) t.put("terms", terms.save());
         t.putInt("nextSiege", nextSiege);
+        t.putInt("targetScore", targetScore);
+        t.putString("reason", reason);
         return t;
     }
 
@@ -157,6 +163,8 @@ public final class War {
         if (t.contains("peaceBy")) w.peaceOfferedByAttackers = t.getBoolean("peaceBy");
         if (t.contains("terms")) w.terms = Treaty.load(t.getCompound("terms"));
         w.nextSiege = Math.max(1, t.getInt("nextSiege"));
+        w.targetScore = t.getInt("targetScore");
+        w.reason = t.getString("reason");
         return w;
     }
 }

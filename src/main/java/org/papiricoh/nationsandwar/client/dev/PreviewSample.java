@@ -6,6 +6,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.ChunkPos;
+import org.papiricoh.nationsandwar.api.NationsAndWarApi;
 import org.papiricoh.nationsandwar.core.NW;
 import org.papiricoh.nationsandwar.data.NWSavedData;
 import org.papiricoh.nationsandwar.model.GovernmentType;
@@ -28,11 +29,15 @@ import java.util.UUID;
 /**
  * Sample politics for the preview (only once per world): the player's town Highmoor in the Kingdom of Valoria with ten
  * named residents and filled role trees, a second town in the province of North March under a governor, an allied NPC
- * nation, and an active war against another NPC nation with a siege next to the player.
+ * nation, and an active war against another NPC nation with a siege next to the player. Apart from that (and also added to
+ * worlds seeded before it), a nation run by another mod: "The Pit" with one town south-west of Highmoor.
  */
 public final class PreviewSample {
     public static final List<String> NAMES = List.of("Notch", "jeb_", "Dinnerbone", "Grumm", "Steve", "Alex", "Herobrine", "Technoblade", "Dream",
             "Ph1LzA", "TommyInnit", "Grian");
+
+    /** The provider key of the sample managed nation (its card's handler is registered by {@link DevPreview}). */
+    public static final String PIT = "nationsandwar_preview:pit";
 
     private PreviewSample() {
     }
@@ -47,7 +52,10 @@ public final class PreviewSample {
         MinecraftServer server = player.getServer();
         NWSavedData data = NW.data(server);
         Politics pol = data.politics;
-        if (pol.townOf(player.getUUID()) != null) return;
+        if (pol.townOf(player.getUUID()) != null) {
+            seedManaged(player);
+            return;
+        }
         ServerLevel level = player.serverLevel();
         BlockPos at = player.blockPosition();
         ChunkPos home = new ChunkPos(at);
@@ -113,7 +121,24 @@ public final class PreviewSample {
                 s.control = 0.35f;
             }
         }
+        seedManaged(player);
         NW.changed(server);
+    }
+
+    /** "The Pit", run by {@link #PIT}, with the town Brimstone Gate 6 chunks west and 8 south of Highmoor (once per world). */
+    private static void seedManaged(ServerPlayer player) {
+        MinecraftServer server = player.getServer();
+        if (NationsAndWarApi.managedNation(server, PIT) != null) return;
+        Town home = NW.pol(server).townOf(player.getUUID());
+        BlockPos centre = (home == null ? player.blockPosition() : BlockPos.of(home.spawn)).offset(-16 * 6, 0, 16 * 8);
+        Nation pit = NationsAndWarApi.createManagedNation(server, PIT, "The Pit", "nationsandwar.gov.theocracy", 0x9C1F1F);
+        NationsAndWarApi.createManagedTown(player.serverLevel(), pit, "Brimstone Gate", centre, NationsAndWarApi.square(centre, 2), null, false, null, null);
+    }
+
+    /** Stands the player between Highmoor and the Pit (2 chunks west, 4 south of Highmoor) so the map shows both. */
+    public static void toManagedView(ServerPlayer player) {
+        Town t = NW.pol(player.getServer()).townOf(player.getUUID());
+        if (t != null) stand(player, BlockPos.of(t.spawn).offset(-32, 0, 64));
     }
 
     /** A guard, a soldier, an envoy, a Town Core and a Siege Banner lined up in front of the player (facing south). */

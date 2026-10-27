@@ -30,7 +30,8 @@ import java.util.UUID;
  * The mod's own claim map (the fallback when JourneyMap and Xaero's are absent): a chunk grid around the player over the
  * terrain's map colours, claims in their {@link MapStyle} colours with borders, besieged and occupied chunks hatched, a
  * hover tooltip, and click-or-drag to claim free chunks (or unclaim my own) with the outpost toggle. Right-drag pans,
- * the wheel zooms.
+ * the wheel zooms. Land of a nation run by another mod is darker and striped in its colour; clicking it shows that nation's
+ * card ({@link Tab#managedCard}) over the map.
  */
 public final class MapTab extends Tab {
     private static final int MAX_SAMPLES_PER_FRAME = 96;
@@ -44,6 +45,9 @@ public final class MapTab extends Tab {
     private int mapX, mapY, mapW, mapH;
     private float centreX, centreZ;
     private String terrainDim = "";
+    /** The managed nation whose card shows over the map; {@link #pickKey}: a provider key to pick once known (preview). */
+    private UUID picked;
+    private String pickKey;
 
     public MapTab(NationScreen screen) {
         super(screen);
@@ -62,6 +66,11 @@ public final class MapTab extends Tab {
     private static String dim() {
         var level = Minecraft.getInstance().level;
         return level == null ? "" : level.dimension().location().toString();
+    }
+
+    /** Shows the card of the first nation run by {@code key} as soon as it is known. */
+    public void pickManaged(String key) {
+        pickKey = key;
     }
 
     @Override
@@ -105,9 +114,13 @@ public final class MapTab extends Tab {
                 Briefs.TownBrief t = owner == null ? null : ClientClaims.town(owner);
                 if (t != null) {
                     int fill = MapStyle.fill(dim, t, key);
-                    g.fill(sx, sy, sx + cell, sy + cell, Draw.alpha(fill, (int) (255 * Math.max(0.6f, MapStyle.fillOpacity()))));
+                    boolean managed = MapStyle.managed(t);
+                    float opacity = managed ? Math.max(0.75f, MapStyle.managedOpacity()) : Math.max(0.6f, MapStyle.fillOpacity());
+                    g.fill(sx, sy, sx + cell, sy + cell, Draw.alpha(fill, (int) (255 * opacity)));
                     int edge = owner.equals(myTown) ? Draw.GOLD : ClientClaims.enemies(myNation, t.nation()) ? Draw.BAD
-                            : ClientClaims.allied(myNation, t.nation()) ? Draw.GOOD : Draw.opaque(Draw.mix(ClientClaims.mapColor(t), 0xFFFFFF, 0.45f));
+                            : ClientClaims.allied(myNation, t.nation()) ? Draw.GOOD
+                            : managed ? Draw.opaque(MapStyle.accent(t)) : Draw.opaque(Draw.mix(ClientClaims.mapColor(t), 0xFFFFFF, 0.45f));
+                    if (managed && MapStyle.state(dim, t, key) == MapStyle.State.NORMAL) stripes(g, sx, sy, Draw.alpha(MapStyle.accent(t), 0xB0));
                     if (MapStyle.edge(claims, owner, cx, cz, 0, -1)) g.fill(sx, sy, sx + cell, sy + 1, edge);
                     if (MapStyle.edge(claims, owner, cx, cz, 0, 1)) g.fill(sx, sy + cell - 1, sx + cell, sy + cell, edge);
                     if (MapStyle.edge(claims, owner, cx, cz, -1, 0)) g.fill(sx, sy, sx + 1, sy + cell, edge);
@@ -132,8 +145,35 @@ public final class MapTab extends Tab {
         }
         playerMarker(g, mc);
         ui.unclip(g);
+        if (managedCard(g)) hovered = null;
         if (hovered != null) hoverTip(v, dim, claims, hovered, myTown, myNation);
         legend(g, y + h - 11);
+    }
+
+    /** Sparse stripes over a cell, continuous across neighbouring cells (the other way to a siege's hatch). */
+    private void stripes(GuiGraphics g, int sx, int sy, int color) {
+        for (int r = 0; r < cell; r++)
+            for (int c = 0; c < cell; c++)
+                if (((sx + c - sy - r) & 3) == 0) g.fill(sx + c, sy + r, sx + c + 1, sy + r + 1, color);
+    }
+
+    /** The picked managed nation's card in the map's top-right corner; returns whether the mouse is over it. */
+    private boolean managedCard(GuiGraphics g) {
+        if (pickKey != null)
+            for (Briefs.NationBrief b : ClientClaims.nations())
+                if (pickKey.equals(b.managedBy())) {
+                    picked = b.id();
+                    pickKey = null;
+                    break;
+                }
+        Briefs.NationBrief n = picked == null ? null : ClientClaims.nation(picked);
+        if (n == null || !n.managed()) return false;
+        int cw = 150, ch = Math.min(mapH - 12, 190), cx = mapX + mapW - cw - 8, cy = mapY + 6;
+        ui.zone(cx, cy, cw, ch, () -> {
+        });
+        managedCard(g, n, cx, cy, cw, ch);
+        ui.button(g, cx + cw - 15, cy + 4, 12, 11, Component.literal("✕"), Ui.Style.NORMAL, null, () -> picked = null);
+        return ui.over(cx, cy, cw, ch);
     }
 
     private int sx(int cx) {
@@ -178,6 +218,10 @@ public final class MapTab extends Tab {
                         .withStyle(s -> s.withColor(0xFF6060)));
             else if (MapStyle.state(dim, t, key) == MapStyle.State.OCCUPIED) label = label.copy().append(tr("occupied_suffix").withStyle(s -> s.withColor(0xB0B0B0)));
             lines.add(label);
+            if (MapStyle.managed(t)) {
+                lines.add(Component.translatable("nationsandwar.managed.badge").withStyle(s -> s.withColor(Draw.MANAGED & 0xFFFFFF)));
+                lines.add(Component.translatable("nationsandwar.managed.inspect").withStyle(s -> s.withColor(0x9AA3B5)));
+            }
             String rel = owner.equals(myTown) ? "self" : ClientClaims.enemies(myNation, t.nation()) ? "enemy" : ClientClaims.allied(myNation, t.nation()) ? "ally" : "neutral";
             lines.add(tr("relation." + rel).withStyle(s -> s.withColor(DiplomacyTab.relationColor(rel) & 0xFFFFFF)));
         }
@@ -211,7 +255,10 @@ public final class MapTab extends Tab {
         lx = key(g, lx, ly, Draw.GOOD, tr("relation.ally"));
         lx = key(g, lx, ly, Draw.BAD, tr("relation.enemy"));
         lx = key(g, lx, ly, 0xFFFF3030, tr("besieged"));
-        key(g, lx, ly, 0xFF505050, tr("occupied"));
+        lx = key(g, lx, ly, 0xFF505050, tr("occupied"));
+        g.fill(lx, ly + 1, lx + 7, ly + 8, 0xFF2A2433);
+        for (int i = 0; i < 7; i++) for (int j = 0; j < 7; j++) if (((i - j) & 3) == 0) g.fill(lx + i, ly + 1 + j, lx + i + 1, ly + 2 + j, Draw.MANAGED);
+        Draw.text(g, font, Component.translatable("nationsandwar.managed.badge"), lx + 9, ly + 2, 0.75f, Draw.MUTED, false);
         Component hint = tr("map_hint");
         Draw.text(g, font, hint, x + w - 2 - font.width(hint) * 0.7f, ly + 2, 0.7f, 0xFF6A7384, false);
     }
@@ -241,9 +288,16 @@ public final class MapTab extends Tab {
             return true;
         }
         PoliticsView v = org.papiricoh.nationsandwar.client.ClientPolitics.view();
-        if (button != 0 || v == null || v.town() == null) return false;
+        if (button != 0) return false;
         long key = chunkAt(mx, my);
         UUID owner = ClientClaims.claims(dim()).get(key);
+        Briefs.TownBrief ot = owner == null ? null : ClientClaims.town(owner);
+        if (ot != null && ot.nation() != null && MapStyle.managed(ot)) {
+            picked = ot.nation();
+            return true;
+        }
+        picked = null;
+        if (v == null || v.town() == null) return false;
         painted.clear();
         if (owner == null && has(v.town().myPerms(), Perm.CLAIM)) paint = 1;
         else if (v.town().id().equals(owner) && has(v.town().myPerms(), Perm.UNCLAIM)) paint = -1;

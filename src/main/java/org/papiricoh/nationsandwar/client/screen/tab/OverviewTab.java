@@ -75,8 +75,7 @@ public final class OverviewTab extends Tab {
             return;
         }
         int sw = cw - 12;
-        GovernmentType gt = GovernmentType.byId(n.government());
-        by = stat(g, tr("government"), Component.translatable(gt.key()), cx + 6, by, sw, Draw.TEXT);
+        by = stat(g, tr("government"), government(n.id(), n.government()), cx + 6, by, sw, Draw.TEXT);
         by = stat(g, Component.translatable("nationsandwar.info.capital"), Component.literal(townName(v, n.capital())), cx + 6, by, sw, Draw.TEXT);
         by = stat(g, Component.translatable("nationsandwar.info.towns"), Component.literal(n.towns().size() + " · " + n.citizens().size()), cx + 6, by, sw, Draw.TEXT);
         stat(g, Component.translatable("nationsandwar.info.bank"), money(n.bank()), cx + 6, by, sw, Draw.GOOD);
@@ -164,7 +163,9 @@ public final class OverviewTab extends Tab {
             int color = nationColor(v, foe);
             ui.row(g, fx, ry, fw, 14, false, () -> screen.select("war"));
             g.fill(fx + 3, ry + 4, fx + 8, ry + 9, Draw.opaque(color));
-            g.drawString(font, Draw.fit(font, tr("versus", nationName(v, foe)), fw - 80), fx + 11, ry + 3, Draw.TEXT, false);
+            boolean managed = org.papiricoh.nationsandwar.client.ClientClaims.managed(foe);
+            g.drawString(font, Draw.fit(font, tr("versus", nationName(v, foe)), fw - (managed ? 132 : 80)), fx + 11, ry + 3, Draw.TEXT, false);
+            if (managed) managedBadge(g, fx + fw - 126, ry + 2);
             ui.chip(g, fx + fw - 74, ry + 2, Component.translatable(K + "phase." + war.phase().toLowerCase()), WarTab.phaseColor(war.phase()));
             ry += 16;
         }

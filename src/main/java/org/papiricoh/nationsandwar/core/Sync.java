@@ -157,13 +157,15 @@ public final class Sync {
         for (Town t : pol.towns.values()) {
             int flags = 0;
             for (Flag f : Flag.values()) if (t.flags.getOrDefault(f, f.defaultOn)) flags |= 1 << f.ordinal();
-            towns.add(new Briefs.TownBrief(t.id, t.name, t.color, t.nation, t.province, flags, t.npc, NW.name(server, t.mayor())));
+            towns.add(new Briefs.TownBrief(t.id, t.name, t.color, t.nation, t.province, flags, t.npc, NW.name(server, t.mayor()),
+                    t.managedBy == null ? "" : t.managedBy));
         }
         List<Briefs.ProvinceBrief> provinces = new ArrayList<>();
         pol.provinces.values().forEach(p -> provinces.add(new Briefs.ProvinceBrief(p.id, p.name, p.nation)));
         List<Briefs.NationBrief> nations = new ArrayList<>();
         for (Nation n : pol.nations.values()) {
-            nations.add(new Briefs.NationBrief(n.id, n.name, n.color, n.government.id(), n.alliance, n.capital, n.npc, NW.name(server, n.leader())));
+            nations.add(new Briefs.NationBrief(n.id, n.name, n.color, n.government.id(), n.alliance, n.capital, n.npc, NW.name(server, n.leader()),
+                    n.managedBy == null ? "" : n.managedBy, n.titleKey()));
         }
         List<Briefs.AllianceBrief> alliances = new ArrayList<>();
         pol.alliances.values().forEach(a -> alliances.add(new Briefs.AllianceBrief(a.id, a.name, a.color)));

@@ -109,3 +109,41 @@ Existing: `gui`, `world`, `showcase`. Read the PNGs with the Read tool to check 
 - `./gradlew compileJava` / `./gradlew test` (JUnit) / `./gradlew runGameTestServer` (6 GameTests) must stay green.
 - Only one Gradle at a time.
 - There is no git history to rely on and you must **not** commit.
+
+## v0.2 GUI pass: nations run by other mods
+The server side of the API is done and tested (`docs/API.md`). What the client must show:
+
+### Data
+- `ClientClaims.nation(id)` and `ClientClaims.town(id)` return briefs with `managedBy()` (`""` = not managed), `managed()`, and for nations `titles()`.
+  - `titles()` is the lang prefix of the government's names: the noun is the prefix itself, the ranks are `<prefix>.leader` and so on.
+  - Use it instead of `nationsandwar.gov.<government>` wherever a nation's government is named: `TerritoryWatcher`, `OverviewTab`, `DiplomacyTab`, `EnvoyScreen`.
+- `PoliticsView.NationSummary` has no managed flag: look the nation up in `ClientClaims`.
+- `api.client.ManagedNationScreens.handler(managedBy)` returns the providing mod's handler, or null. Its methods:
+  - `title`, `description`, `button`;
+  - `canOpen(player, brief)`, `cannotOpen`;
+  - `open(player, brief)`.
+
+### What to build
+1. **The managed-nation card**
+   - It appears wherever a nation can be selected or inspected: the diplomacy list row, a claim picked on the map tab, the overview's "nation here" info, anything similar.
+   - When the nation is managed, show an **empty card** instead of the normal details:
+     - its colour and emblem area;
+     - the handler's title and description;
+     - the badge `nationsandwar.managed.badge`.
+   - The card has one button with the handler's label, enabled only if `canOpen`. Its tooltip is `cannotOpen` when disabled; on press it calls `open`.
+   - With no handler: the generic text `nationsandwar.managed.description` and no button.
+   - The diplomacy row of a managed nation has **no** war/alliance buttons (the server refuses them anyway).
+2. **Badge** managed nations in nation lists (diplomacy, overview, war tab participants).
+3. **Maps**
+   - Managed claims get a distinct style in `compat/MapStyle`, used by both JourneyMap and Xaero. Suggestion: a darker fill with a hatch or border in the nation colour.
+   - The territory notice (`TerritoryWatcher`) uses the managed titles.
+4. **Wars**
+   - `WarTab`/`SiegePanel`/notices must cope with a side that is a managed nation: it has no leader and no citizens; show its name and colour.
+   - A war's `reason` lang key is in the server's `War.reason`, but it is not in `WarBrief` yet. If you need it, add a `reason` string to `WarBrief` (`Sync.briefs`) minimally and say so.
+5. **Preview**
+   - Add to `PreviewSample` a managed nation "The Pit" with one town near Highmoor, created with `NationsAndWarApi.createManagedNation` / `createManagedTown`, key `nationsandwar_preview:pit`, titles `nationsandwar.gov.theocracy`.
+   - Register a dev-only `ManagedNationScreens` handler for it in the preview harness; its `open` closes the screen and shows a toast.
+   - Add scenes `gui:managed` (the diplomacy tab with the Pit selected) and `gui:managedmap`.
+
+### Lang
+Already there: `nationsandwar.managed.description|open|cannot_open|badge`. Add any new keys through `tools/lang/genlang.py` (EN+ES).

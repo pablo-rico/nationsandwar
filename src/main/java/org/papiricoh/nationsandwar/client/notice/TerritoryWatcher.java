@@ -102,6 +102,7 @@ public final class TerritoryWatcher {
         List<NoticeHud.Badge> badges = new ArrayList<>();
         if (enemy) badges.add(new NoticeHud.Badge(tr("badge.war"), Draw.BAD & 0xFFFFFF));
         else if (ally) badges.add(new NoticeHud.Badge(tr("badge.ally"), Draw.GOOD & 0xFFFFFF));
+        if (n != null && n.managed()) badges.add(new NoticeHud.Badge(tr("badge.managed"), Draw.MANAGED & 0xFFFFFF));
         badges.add(pvp ? new NoticeHud.Badge(tr("badge.pvp"), Draw.WARN & 0xFFFFFF) : new NoticeHud.Badge(tr("badge.safe"), Draw.MUTED & 0xFFFFFF));
         SoundEvent sound = enemy ? SoundEvents.NOTE_BLOCK_BASS.value() : null;
         String townIcon = enemy ? "enemy" : ally ? "ally" : "town";
@@ -124,7 +125,7 @@ public final class TerritoryWatcher {
 
     /** "Kingdom of Valoria". */
     private static Component nationName(Briefs.NationBrief n) {
-        return tr("nation_of", Component.translatable("nationsandwar.gov." + n.government()), n.name());
+        return tr("nation_of", Component.translatable(ClientClaims.titles(n.id(), n.government())), n.name());
     }
 
     /** "a · b", or whichever is present. */

@@ -36,6 +36,10 @@ public final class Politics {
     private final Map<UUID, UUID> residence = new HashMap<>();
 
     public Rules rules = Rules.DEFAULTS;
+    /** Hears every change (see {@link PoliticsObserver}); {@code core} installs the one that posts the API's events. */
+    public PoliticsObserver observer = PoliticsObserver.NONE;
+    /** Chunks no town may claim (dimension id, chunk key): other mods reserve them through {@code api.ClaimVetoes}. */
+    public java.util.function.BiPredicate<String, Long> claimVeto = (dim, chunk) -> false;
 
     // --- queries -----------------------------------------------------------------------------------------------------------
 
@@ -121,6 +125,7 @@ public final class Politics {
         Result n = checkName(name, towns.values().stream().map(t -> t.name).toList());
         if (!n.ok()) return n;
         if (townAt(dim, chunk) != null) return Result.fail("chunk_taken");
+        if (claimVeto.test(dim, chunk)) return Result.fail("claim_reserved");
         if (tooClose(dim, chunk, null)) return Result.fail("too_close");
         Town t = new Town(UUID.randomUUID(), name.trim(), dim, chunk);
         t.color = colorFor(t.id);
@@ -132,6 +137,7 @@ public final class Politics {
         towns.put(t.id, t);
         residence.put(founder, t.id);
         index(t, chunk);
+        observer.townFounded(t);
         return Result.ok("town_founded", t.name);
     }
 
@@ -149,10 +155,38 @@ public final class Politics {
         for (int dx = -radius; dx <= radius; dx++) {
             for (int dz = -radius; dz <= radius; dz++) {
                 long c = ChunkPos.asLong(cx + dx, cz + dz);
-                if (townAt(dim, c) == null) index(t, c);
+                if (townAt(dim, c) == null && !claimVeto.test(dim, c)) index(t, c);
             }
         }
+        observer.townFounded(t);
         return t;
+    }
+
+    /**
+     * A town another mod runs ({@code key} = its provider): no residents, an empty tree, the given chunks where free (no
+     * buffer, no veto: the provider placed it). Its nation is attached by the caller.
+     */
+    public Town foundManagedTown(String key, String name, String dim, long centre, long core, Collection<Long> chunks, long now) {
+        Town t = new Town(UUID.randomUUID(), uniqueName(name, towns.values().stream().map(x -> x.name).toList()), dim, centre);
+        t.color = colorFor(t.id);
+        t.roles = GovernmentType.defaultTownTree(null);
+        t.managedBy = key;
+        t.spawn = core;
+        t.core = core;
+        t.founded = now;
+        towns.put(t.id, t);
+        if (townAt(dim, centre) == null) index(t, centre);
+        for (long c : chunks) if (townAt(dim, c) == null) index(t, c);
+        observer.townFounded(t);
+        return t;
+    }
+
+    /** Claims a free chunk for a managed town (no cost, no buffer, no adjacency). */
+    public boolean claimManaged(Town town, long chunk) {
+        if (townAt(town.dimension, chunk) != null) return false;
+        index(town, chunk);
+        observer.claimed(town, chunk);
+        return true;
     }
 
     /**
@@ -164,6 +198,7 @@ public final class Politics {
         if (actor != null && !can(actor, town, Perm.CLAIM)) return Result.fail("no_perm");
         if (!town.dimension.equals(dim)) return Result.fail("wrong_dimension");
         if (townAt(dim, chunk) != null) return Result.fail("chunk_taken");
+        if (claimVeto.test(dim, chunk)) return Result.fail("claim_reserved");
         if (town.claims.size() >= maxClaims(town)) return Result.fail("claim_limit", maxClaims(town));
         boolean adjacent = adjacentTo(town, chunk);
         if (!adjacent && !outpost) return Result.fail("not_adjacent");
@@ -175,6 +210,7 @@ public final class Politics {
         town.bank -= cost;
         index(town, chunk);
         if (outpost) town.outposts.add(chunk);
+        observer.claimed(town, chunk);
         return Result.ok(outpost ? "outpost_claimed" : "claimed", cost);
     }
 
@@ -183,10 +219,12 @@ public final class Politics {
         if (!town.claims.contains(chunk)) return Result.fail("not_yours");
         if (chunk == town.homeChunk) return Result.fail("home_chunk");
         unindex(town, chunk);
+        observer.unclaimed(town, chunk);
         return Result.ok("unclaimed");
     }
 
     public Result invite(UUID actor, Town town, UUID target) {
+        if (town.managed()) return Result.fail("managed");
         if (!can(actor, town, Perm.INVITE)) return Result.fail("no_perm");
         if (townOf(target) != null) return Result.fail("target_in_town");
         town.invites.add(target);
@@ -195,9 +233,11 @@ public final class Politics {
 
     public Result join(UUID player, Town town) {
         if (townOf(player) != null) return Result.fail("already_in_town");
+        if (town.managed()) return Result.fail("managed");
         if (!town.open && !town.invites.remove(player)) return Result.fail("not_invited");
         town.residents.add(player);
         residence.put(player, town.id);
+        observer.residentJoined(town, player);
         return Result.ok("joined", town.name);
     }
 
@@ -231,6 +271,7 @@ public final class Politics {
                 if (p != null && player.equals(p.governor)) setGovernorRaw(n, p, null);
             }
         }
+        observer.residentLeft(t, player);
     }
 
     public Result setMayor(UUID actor, Town town, UUID target) {
@@ -238,7 +279,10 @@ public final class Politics {
         if (!town.residents.contains(target)) return Result.fail("not_resident");
         town.roles.setLeader(target);
         Nation n = nationOf(town);
-        if (n != null && town.id.equals(n.capital) && actor.equals(n.leader())) n.roles.setLeader(target);
+        if (n != null && town.id.equals(n.capital) && actor.equals(n.leader())) {
+            n.roles.setLeader(target);
+            observer.leaderChanged(n, actor, target);
+        }
         return Result.ok("mayor_set");
     }
 
@@ -300,7 +344,9 @@ public final class Politics {
         if (!town.roles.isLeader(actor)) return Result.fail("leader_only");
         Result n = checkName(name, towns.values().stream().filter(t -> t != town).map(t -> t.name).toList());
         if (!n.ok()) return n;
+        String before = town.name;
         town.name = name.trim();
+        observer.renamed(town, before);
         return Result.ok("renamed");
     }
 
@@ -329,6 +375,7 @@ public final class Politics {
         for (long c : new ArrayList<>(town.claims)) unindex(town, c);
         for (UUID r : town.residents) residence.remove(r);
         towns.remove(town.id);
+        observer.townRemoved(town);
     }
 
     // --- roles (town or nation trees) --------------------------------------------------------------------------------------
@@ -528,16 +575,31 @@ public final class Politics {
         if (town.bank < rules.nationCost()) return Result.fail("town_poor", rules.nationCost());
         town.bank -= rules.nationCost();
         Nation nation = newNation(name.trim(), gov, founder, now);
-        attachTown(nation, town);
         nation.capital = town.id;
+        attachTown(nation, town);
+        observer.nationFounded(nation);
         return Result.ok("nation_founded", nation.name);
     }
 
     public Nation foundNpcNation(String name, GovernmentType gov, Town capital, long now) {
         Nation nation = newNation(uniqueName(name, nations.values().stream().map(x -> x.name).toList()), gov, null, now);
         nation.npc = true;
-        attachTown(nation, capital);
         nation.capital = capital.id;
+        attachTown(nation, capital);
+        observer.nationFounded(nation);
+        return nation;
+    }
+
+    /**
+     * A nation another mod runs ({@code key} = its provider): no leader, no towns yet (the first one attached becomes its
+     * capital), names from {@code titles} (a lang prefix) when not null.
+     */
+    public Nation foundManagedNation(String key, String name, String titles, int color, long now) {
+        Nation nation = newNation(uniqueName(name, nations.values().stream().map(x -> x.name).toList()), GovernmentType.KINGDOM, null, now);
+        nation.managedBy = key;
+        nation.titles = titles;
+        nation.color = color & 0xFFFFFF;
+        observer.nationFounded(nation);
         return nation;
     }
 
@@ -554,9 +616,12 @@ public final class Politics {
         nation.towns.add(town.id);
         town.nation = nation.id;
         nation.invites.remove(town.id);
+        if (nation.capital == null) nation.capital = town.id;
+        observer.townJoinedNation(nation, town);
     }
 
     public Result nationInvite(UUID actor, Nation nation, Town town) {
+        if (nation.managed() || town.managed()) return Result.fail("managed");
         if (!canNation(actor, nation, Perm.MANAGE_TOWNS)) return Result.fail("no_perm");
         if (town.nation != null) return Result.fail("already_in_nation");
         nation.invites.add(town.id);
@@ -567,6 +632,7 @@ public final class Politics {
         Town town = townOf(mayor);
         if (town == null || !town.roles.isLeader(mayor)) return Result.fail("leader_only");
         if (town.nation != null) return Result.fail("already_in_nation");
+        if (nation.managed()) return Result.fail("managed");
         if (!nation.invites.contains(town.id)) return Result.fail("not_invited");
         attachTown(nation, town);
         return Result.ok("nation_joined", nation.name);
@@ -603,13 +669,18 @@ public final class Politics {
         n.towns.remove(town.id);
         town.nation = null;
         town.province = null;
+        observer.townLeftNation(n, town);
         if (town.id.equals(n.capital)) {
             if (n.towns.isEmpty()) {
                 removeNation(n);
             } else {
                 Town next = towns.get(n.towns.iterator().next());
                 n.capital = next.id;
-                if (n.roles.leader() != null && town.residents.contains(n.roles.leader())) n.roles.setLeader(next.mayor());
+                UUID before = n.roles.leader();
+                if (before != null && town.residents.contains(before)) {
+                    n.roles.setLeader(next.mayor());
+                    observer.leaderChanged(n, before, next.mayor());
+                }
             }
         }
     }
@@ -625,6 +696,7 @@ public final class Politics {
         if (!nation.roles.isLeader(actor)) return Result.fail("leader_only");
         if (!citizens(nation).contains(target)) return Result.fail("not_member");
         nation.roles.setLeader(target);
+        observer.leaderChanged(nation, actor, target);
         return Result.ok("leader_set");
     }
 
@@ -643,7 +715,9 @@ public final class Politics {
         if (!nation.roles.isLeader(actor)) return Result.fail("leader_only");
         Result n = checkName(name, nations.values().stream().filter(x -> x != nation).map(x -> x.name).toList());
         if (!n.ok()) return n;
+        String before = nation.name;
         nation.name = name.trim();
+        observer.renamed(nation, before);
         return Result.ok("renamed");
     }
 
@@ -679,14 +753,17 @@ public final class Politics {
             Province p = provinces.get(pid);
             if (p != null) removeProvince(n, p);
         }
+        List<Town> freed = new ArrayList<>();
         for (UUID tid : n.towns) {
             Town t = towns.get(tid);
             if (t != null) {
                 t.nation = null;
                 t.province = null;
+                freed.add(t);
             }
         }
         n.towns.clear();
+        for (Town t : freed) observer.townLeftNation(n, t);
         if (n.alliance != null) {
             Alliance a = alliances.get(n.alliance);
             if (a != null) leaveAlliance(a, n);
@@ -696,12 +773,14 @@ public final class Politics {
             if (n.id.equals(other.overlord)) other.overlord = null;
         }
         nations.remove(n.id);
+        observer.nationRemoved(n);
     }
 
     // --- alliances ---------------------------------------------------------------------------------------------------------
 
     public Result createAlliance(UUID actor, Nation nation, String name) {
         if (actor != null && !canNation(actor, nation, Perm.DIPLOMACY)) return Result.fail("no_perm");
+        if (nation.managed()) return Result.fail("managed");
         if (nation.alliance != null) return Result.fail("already_in_alliance");
         Result n = checkName(name, alliances.values().stream().map(a -> a.name).toList());
         if (!n.ok()) return n;
@@ -711,12 +790,14 @@ public final class Politics {
         a.color = colorFor(a.id);
         alliances.put(a.id, a);
         nation.alliance = a.id;
+        observer.allianceJoined(a, nation);
         return Result.ok("alliance_created", a.name);
     }
 
     public Result allianceInvite(UUID actor, Alliance a, Nation target) {
         Nation lead = nations.get(a.leader);
         if (actor != null && (lead == null || !canNation(actor, lead, Perm.DIPLOMACY))) return Result.fail("no_perm");
+        if (target.managed() || lead != null && lead.managed()) return Result.fail("managed");
         if (target.alliance != null) return Result.fail("already_in_alliance");
         a.invites.add(target.id);
         return Result.ok("invited");
@@ -725,9 +806,9 @@ public final class Politics {
     public Result allianceJoin(UUID actor, Nation nation, Alliance a) {
         if (actor != null && !canNation(actor, nation, Perm.DIPLOMACY)) return Result.fail("no_perm");
         if (nation.alliance != null) return Result.fail("already_in_alliance");
+        if (nation.managed()) return Result.fail("managed");
         if (!a.invites.remove(nation.id)) return Result.fail("not_invited");
-        a.members.add(nation.id);
-        nation.alliance = a.id;
+        addToAlliance(a, nation);
         return Result.ok("alliance_joined", a.name);
     }
 
@@ -747,6 +828,13 @@ public final class Politics {
         return Result.ok("kicked");
     }
 
+    /** Puts a nation in an alliance with no checks (NPC diplomacy; managed nations are refused by the callers). */
+    public void addToAlliance(Alliance a, Nation nation) {
+        a.members.add(nation.id);
+        nation.alliance = a.id;
+        observer.allianceJoined(a, nation);
+    }
+
     private void leaveAlliance(Alliance a, Nation n) {
         a.members.remove(n.id);
         n.alliance = null;
@@ -755,6 +843,7 @@ public final class Politics {
         } else if (a.leader.equals(n.id)) {
             a.leader = a.members.iterator().next();
         }
+        observer.allianceLeft(a, n);
     }
 
     // --- claim index -------------------------------------------------------------------------------------------------------
@@ -776,6 +865,7 @@ public final class Politics {
     public void transferChunk(Town from, Town to, long chunk) {
         unindex(from, chunk);
         index(to, chunk);
+        observer.chunkTransferred(from, to, chunk);
     }
 
     private boolean adjacentTo(Town town, long chunk) {

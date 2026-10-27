@@ -37,6 +37,8 @@ import org.papiricoh.nationsandwar.registry.NWRegistry;
 import org.papiricoh.nationsandwar.war.War;
 import org.papiricoh.nationsandwar.war.WarService;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -285,6 +287,164 @@ public final class NWGameTests {
             h.getLevel().getEntitiesOfClass(EnvoyEntity.class, box).forEach(e -> e.discard());
         } finally {
             Actions.removeCore(h.getLevel().getServer(), t);
+            cleanup(h, t);
+        }
+        h.succeed();
+    }
+
+    // --- the API (v0.2) ----------------------------------------------------------------------------------------------------
+
+    private static final String TEST_KEY = "nationsandwar_test:power";
+    private static boolean allowDeclare;
+    private static final List<String> HEARD = new ArrayList<>();
+
+    static {
+        org.papiricoh.nationsandwar.api.ManagedNations.register(new org.papiricoh.nationsandwar.api.ManagedNationProvider() {
+            @Override
+            public String key() {
+                return TEST_KEY;
+            }
+
+            @Override
+            public boolean mayBeDeclaredOn(net.minecraft.server.MinecraftServer server, Nation self, Nation attacker) {
+                return allowDeclare;
+            }
+        });
+        org.papiricoh.nationsandwar.api.WarApi.registerCombatant(e -> {
+            for (String tag : e.getTags()) if (tag.startsWith("nwtest_for_")) return UUID.fromString(tag.substring("nwtest_for_".length()));
+            return null;
+        });
+        net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener((org.papiricoh.nationsandwar.api.event.WarEvent.CoreOpened e) ->
+                HEARD.add("core:" + e.town().name));
+        net.neoforged.neoforge.common.NeoForge.EVENT_BUS.addListener((org.papiricoh.nationsandwar.api.event.TownEvent.Removed e) ->
+                HEARD.add("removed:" + e.town().name));
+    }
+
+    /** A managed nation with one one-chunk town (no Core block) on the chunk holding {@code rel}. */
+    private static Town managedTown(GameTestHelper h, String name, BlockPos rel) {
+        ServerLevel level = h.getLevel();
+        Nation n = org.papiricoh.nationsandwar.api.NationsAndWarApi.createManagedNation(level.getServer(), TEST_KEY, name + " Power", "nationsandwar.gov.theocracy", 0x880000);
+        BlockPos at = h.absolutePos(rel);
+        return org.papiricoh.nationsandwar.api.NationsAndWarApi.createManagedTown(level, n, name, at, List.of(), at, false, null, null);
+    }
+
+    @GameTest(template = FIELD, batch = "nw_api_locks", timeoutTicks = 100)
+    public static void managedNationsAreLocked(GameTestHelper h) {
+        ServerPlayer mayor = fake(h, "Mayor7", new BlockPos(40, 2, 40));
+        Town seat = managedTown(h, "Gt Seat", new BlockPos(8, 2, 8));
+        var server = h.getLevel().getServer();
+        Politics pol = NW.pol(server);
+        BlockPos far = h.absolutePos(new BlockPos(8, 2, 8)).offset(16 * 8, 0, 0);
+        pol.foundTown(mayor.getUUID(), "Gt Mortals", NW.dim(h.getLevel()), NW.chunk(far), far.asLong(), 0);
+        Town mine = pol.townOf(mayor.getUUID());
+        mine.bank = 1000;
+        pol.foundNation(mayor.getUUID(), "Gt Mortal Realm", GovernmentType.KINGDOM, 0);
+        Nation mn = pol.nationOf(mine), power = pol.nationOf(seat);
+        try {
+            h.assertTrue(power != null && power.managed() && seat.id.equals(power.capital), "managed nation with its seat as capital");
+            allowDeclare = false;
+            h.assertTrue("war.managed".equals(WarService.declare(server, mn, power, false).key()), "ordinary wars refused");
+            allowDeclare = true;
+            Result r = WarService.declare(server, mn, power, false);
+            h.assertTrue(r.ok(), "declared once the provider allows it: " + r.key());
+            h.assertTrue("managed".equals(pol.join(UUID.randomUUID(), seat).key()), "nobody joins it");
+            var brief = org.papiricoh.nationsandwar.core.Sync.briefs(server).nations().stream().filter(b -> b.id().equals(power.id)).findFirst().orElseThrow();
+            h.assertTrue(brief.managed() && TEST_KEY.equals(brief.managedBy()) && "nationsandwar.gov.theocracy".equals(brief.titles()), "brief carries it");
+        } finally {
+            allowDeclare = false;
+            cleanup(h, mine, seat);
+        }
+        h.succeed();
+    }
+
+    @GameTest(template = FIELD, batch = "nw_api_war", timeoutTicks = 600)
+    public static void combatantsBesiegeAndAHeartlessTownFalls(GameTestHelper h) {
+        ServerPlayer mayor = fake(h, "Mayor8", new BlockPos(40, 2, 40));
+        Town seat = managedTown(h, "Gt Hollow", new BlockPos(8, 2, 8));
+        ServerLevel level = h.getLevel();
+        var server = level.getServer();
+        Politics pol = NW.pol(server);
+        BlockPos far = h.absolutePos(new BlockPos(8, 2, 8)).offset(16 * 8, 0, 0);
+        pol.foundTown(mayor.getUUID(), "Gt Crusaders", NW.dim(level), NW.chunk(far), far.asLong(), 0);
+        Town mine = pol.townOf(mayor.getUUID());
+        mine.bank = 1000;
+        pol.foundNation(mayor.getUUID(), "Gt Crusade", GovernmentType.EMPIRE, 0);
+        Nation mn = pol.nationOf(mine), power = pol.nationOf(seat);
+        double rate = NWConfig.get(NWConfig.CONTROL_RATE);
+        NWConfig.CONTROL_RATE.set(0.2);
+        HEARD.clear();
+        Runnable done = () -> {
+            NWConfig.CONTROL_RATE.set(rate);
+            cleanup(h, mine, seat);
+        };
+        Result r = org.papiricoh.nationsandwar.api.WarApi.declare(server, mn.id, power.id,
+                org.papiricoh.nationsandwar.api.WarApi.WarOptions.free().times(0, 24000 * 10).noCooldown());
+        if (!r.ok()) {
+            done.run();
+            h.fail("provider-style declaration refused: " + r.key());
+            return;
+        }
+        War w = WarService.activeWar(NW.data(server), mn.id, power.id);
+        BlockPos banner = sameChunk(h, new BlockPos(8, 2, 8), 3, 3);
+        Result planted = org.papiricoh.nationsandwar.api.WarApi.plantBannerAs(level, banner, mn.id, false);
+        if (w == null || !planted.ok()) {
+            done.run();
+            h.fail("war " + w + ", banner " + planted.key());
+            return;
+        }
+        var soldier = new net.minecraft.world.entity.decoration.ArmorStand(level, banner.getX() + 0.5, banner.getY(), banner.getZ() + 1.5);
+        soldier.addTag("nwtest_for_" + mn.id);
+        level.addFreshEntity(soldier);
+        h.succeedWhen(() -> {
+            h.assertTrue(w.coreOpen.contains(seat.id), "the combatant took the home chunk");
+            org.papiricoh.nationsandwar.api.NationsAndWarApi.flushEvents();
+            h.assertTrue(HEARD.contains("core:Gt Hollow"), "CoreOpened heard: " + HEARD);
+            h.assertTrue(org.papiricoh.nationsandwar.api.WarApi.townFallen(server, w, seat.id, mn.id), "the provider decides the heart");
+            h.assertTrue(w.fallen.contains(seat.id), "fallen");
+            WarService.end(server, w, War.Outcome.ATTACKERS);
+            h.assertTrue(w.phase == War.Phase.ENDED, "a managed loser's treaty applies at once: " + w.phase);
+            h.assertTrue(!pol.towns.containsKey(seat.id) && pol.townAt(seat.dimension, seat.homeChunk) == null, "razed, land free");
+            org.papiricoh.nationsandwar.api.NationsAndWarApi.flushEvents();
+            h.assertTrue(HEARD.contains("removed:Gt Hollow"), "TownEvent.Removed heard: " + HEARD);
+            soldier.discard();
+            done.run();
+        });
+    }
+
+    @GameTest(template = FIELD, batch = "nw_api_bypass", timeoutTicks = 100)
+    public static void bypassZonesLetAFightThrough(GameTestHelper h) {
+        ServerPlayer mayor = fake(h, "Mayor9", new BlockPos(8, 2, 8)), stranger = fake(h, "Stranger9", new BlockPos(9, 2, 8));
+        Town t = town(h, mayor, "Gt Arena", new BlockPos(8, 2, 8));
+        ServerLevel level = h.getLevel();
+        BlockPos abs = sameChunk(h, new BlockPos(8, 2, 8), 2, 2);
+        level.setBlockAndUpdate(abs, Blocks.OAK_PLANKS.defaultBlockState());
+        var zombie = net.minecraft.world.entity.EntityType.ZOMBIE.create(level);
+        zombie.moveTo(abs.getX() + 0.5, abs.getY() + 1, abs.getZ() + 0.5);
+        java.util.function.BooleanSupplier spawnCancelled = () -> {
+            zombie.setSpawnCancelled(false); // the flag lives on the mob, not the event
+            var ev = new net.neoforged.neoforge.event.entity.living.FinalizeSpawnEvent(zombie, level, zombie.getX(), zombie.getY(), zombie.getZ(),
+                    level.getCurrentDifficultyAt(abs), net.minecraft.world.entity.MobSpawnType.NATURAL, null, null);
+            ProtectionEvents.spawn(ev);
+            return ev.isSpawnCancelled();
+        };
+        String key = "nationsandwar_test:arena";
+        try {
+            h.assertTrue(spawnCancelled.getAsBoolean(), "mobs off: the spawn is refused");
+            h.assertFalse(stranger.gameMode.destroyBlock(abs), "outsiders may not break");
+            org.papiricoh.nationsandwar.api.ProtectionBypass.openZone(key, NW.dim(level), new AABB(abs).inflate(8),
+                    org.papiricoh.nationsandwar.api.ProtectionBypass.ALL);
+            BlockPos feet = BlockPos.containing(zombie.getX(), zombie.getY(), zombie.getZ());
+            h.assertTrue(org.papiricoh.nationsandwar.api.ProtectionBypass.bypassed(level, feet, org.papiricoh.nationsandwar.api.ProtectionBypass.Bypass.SPAWNS),
+                    "the zone covers the mob");
+            h.assertFalse(spawnCancelled.getAsBoolean(), "inside the zone the boss's minions spawn");
+            h.assertTrue(stranger.gameMode.destroyBlock(abs), "inside the zone an outsider may break");
+            level.setBlockAndUpdate(abs, Blocks.OAK_PLANKS.defaultBlockState());
+            org.papiricoh.nationsandwar.api.ProtectionBypass.close(key);
+            h.assertFalse(stranger.gameMode.destroyBlock(abs), "protected again once closed");
+            h.assertTrue(spawnCancelled.getAsBoolean(), "and the spawn refused again");
+        } finally {
+            org.papiricoh.nationsandwar.api.ProtectionBypass.close(key);
+            zombie.discard();
             cleanup(h, t);
         }
         h.succeed();

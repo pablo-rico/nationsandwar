@@ -2,18 +2,22 @@ package org.papiricoh.nationsandwar.client.dev;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Screenshot;
+import net.minecraft.client.gui.components.toasts.SystemToast;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.player.Player;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 import org.papiricoh.nationsandwar.NationsAndWar;
+import org.papiricoh.nationsandwar.api.client.ManagedNationScreens;
 import org.papiricoh.nationsandwar.client.ClientPolitics;
 import org.papiricoh.nationsandwar.client.notice.NoticeHud;
 import org.papiricoh.nationsandwar.client.screen.NationScreen;
 import org.papiricoh.nationsandwar.network.NoticePayload;
+import org.papiricoh.nationsandwar.view.Briefs;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -44,7 +48,12 @@ public final class DevPreview {
 
     static {
         scene("gui", new Scene(p -> {
-        }, () -> new NationScreen(arg().split("\\.")[0]), DevPreview::guiPage, 60, false));
+            if (arg().equals("managedmap")) PreviewSample.toManagedView(p);
+        }, () -> new NationScreen(switch (arg()) {
+            case "managed" -> "diplomacy";
+            case "managedmap" -> "map";
+            default -> arg().split("\\.")[0];
+        }), DevPreview::guiPage, 60, false));
         scene("envoy", new Scene(PreviewSample::envoy, () -> null, () -> {
         }, 70, false));
         scene("treaty", new Scene(PreviewSample::treaty, () -> new NationScreen("war"), () -> {
@@ -67,11 +76,31 @@ public final class DevPreview {
         NoticeHud.push(NoticePayload.Kind.PERMISSION, Component.translatable("nationsandwar.notice.denied.build"), Component.literal("Calmere"), 0x3F9E4F, "shield");
     }
 
-    /** For {@code gui:roles.1} / {@code gui:nationroles.2}: opens that page (0 rank, 1 rights, 2 people) of the rank inspector. */
+    /**
+     * For {@code gui:roles.1} / {@code gui:nationroles.2}: opens that page (0 rank, 1 rights, 2 people) of the rank inspector.
+     * {@code gui:managed} / {@code gui:managedmap}: the diplomacy tab / map tab with the sample managed nation's card.
+     */
     private static void guiPage() {
+        if (Minecraft.getInstance().screen instanceof NationScreen s) {
+            if (s.current() instanceof org.papiricoh.nationsandwar.client.screen.tab.DiplomacyTab d && arg().equals("managed")) d.pickManaged(PreviewSample.PIT);
+            if (s.current() instanceof org.papiricoh.nationsandwar.client.screen.tab.MapTab m && arg().equals("managedmap")) m.pickManaged(PreviewSample.PIT);
+        }
         String[] parts = arg().split("\\.");
         if (parts.length > 1 && Minecraft.getInstance().screen instanceof NationScreen s && s.current() instanceof org.papiricoh.nationsandwar.client.screen.tab.RolesTab r)
             r.page(Integer.parseInt(parts[1]));
+    }
+
+    /** The dev-only card handler of the sample managed nation: pressing its button closes the GUI and shows a toast. */
+    private static void registerManagedCard() {
+        ManagedNationScreens.register(PreviewSample.PIT, new ManagedNationScreens.Handler() {
+            @Override
+            public void open(Player player, Briefs.NationBrief nation) {
+                Minecraft mc = Minecraft.getInstance();
+                mc.setScreen(null);
+                SystemToast.add(mc.getToasts(), SystemToast.SystemToastId.PERIODIC_NOTIFICATION, Component.literal(nation.name()),
+                        Component.literal("Preview: handed over to the managing mod"));
+            }
+        });
     }
 
     public static void scene(String name, Scene scene) {
@@ -104,6 +133,7 @@ public final class DevPreview {
         }
         if (!seeded) {
             seeded = true;
+            registerManagedCard();
             var server = mc.getSingleplayerServer();
             server.execute(() -> PreviewSample.seed(server.getPlayerList().getPlayers().getFirst()));
         }

@@ -32,11 +32,34 @@ public final class Nation {
     /** NPC nations: opinion of other nations, -100..100. */
     public final Map<UUID, Integer> opinion = new HashMap<>();
     public long founded;
+    /**
+     * Set when another mod runs this nation through the API ({@code api.ManagedNations}): the provider's key, e.g.
+     * "supernaturalcraft:pit". A managed nation takes no players, alliances or ordinary wars; null for every other nation.
+     */
+    public String managedBy;
+    /** A lang prefix for the government's names that replaces {@link #government}'s ("modid.gov.pit"; null: the government's). */
+    public String titles;
+    /** Data other mods keep on the nation, one key per mod ("supernaturalcraft:guild"). Saved, never read by this mod. */
+    public CompoundTag ext = new CompoundTag();
 
     public Nation(UUID id, String name, GovernmentType government) {
         this.id = id;
         this.name = name;
         this.government = government;
+    }
+
+    public boolean managed() {
+        return managedBy != null;
+    }
+
+    /** NPC and managed nations always count as present to defend (they have no citizens who must be online). */
+    public boolean alwaysDefended() {
+        return npc || managedBy != null;
+    }
+
+    /** The lang prefix of the government's names: the managed titles, or {@code nationsandwar.gov.<id>}. */
+    public String titleKey() {
+        return titles != null ? titles : government.key();
     }
 
     public UUID leader() {
@@ -71,6 +94,9 @@ public final class Nation {
         opinion.forEach((k, v) -> o.putInt(k.toString(), v));
         t.put("opinion", o);
         t.putLong("founded", founded);
+        if (managedBy != null) t.putString("managedBy", managedBy);
+        if (titles != null) t.putString("titles", titles);
+        if (!ext.isEmpty()) t.put("ext", ext.copy());
         return t;
     }
 
@@ -95,6 +121,9 @@ public final class Nation {
             }
         }
         n.founded = t.getLong("founded");
+        if (t.contains("managedBy")) n.managedBy = t.getString("managedBy");
+        if (t.contains("titles")) n.titles = t.getString("titles");
+        if (t.contains("ext")) n.ext = t.getCompound("ext").copy();
         return n;
     }
 }

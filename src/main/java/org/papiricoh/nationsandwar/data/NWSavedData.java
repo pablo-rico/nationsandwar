@@ -37,6 +37,8 @@ public final class NWSavedData extends SavedData {
     public static NWSavedData get(MinecraftServer server) {
         NWSavedData d = server.overworld().getDataStorage().computeIfAbsent(new Factory<>(NWSavedData::new, NWSavedData::load, null), NAME);
         d.politics.rules = NWConfig.rules();
+        d.politics.observer = org.papiricoh.nationsandwar.core.ApiEvents.observer(server);
+        d.politics.claimVeto = org.papiricoh.nationsandwar.api.ClaimVetoes::vetoed;
         return d;
     }
 

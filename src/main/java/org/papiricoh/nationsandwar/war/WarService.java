@@ -22,6 +22,11 @@ import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import net.neoforged.neoforge.network.PacketDistributor;
 import org.papiricoh.nationsandwar.NWConfig;
 import org.papiricoh.nationsandwar.NationsAndWar;
+import org.papiricoh.nationsandwar.api.ManagedNationProvider;
+import org.papiricoh.nationsandwar.api.ManagedNations;
+import org.papiricoh.nationsandwar.api.WarApi;
+import org.papiricoh.nationsandwar.api.event.WarEvent;
+import org.papiricoh.nationsandwar.core.ApiEvents;
 import org.papiricoh.nationsandwar.core.NW;
 import org.papiricoh.nationsandwar.core.Notices;
 import org.papiricoh.nationsandwar.data.NWSavedData;
@@ -96,7 +101,37 @@ public final class WarService {
         War w = warZone(data, town, chunk);
         if (w == null) return null;
         Nation n = data.politics.nationOfPlayer(player);
-        return n != null && w.involves(n.id) ? w : null;
+        if (n != null && w.involves(n.id)) return w;
+        ServerPlayer p = server.getPlayerList().getPlayer(player);
+        return p != null && sideOf(data, w, p) != null ? w : null;
+    }
+
+    /**
+     * The side {@code e} fights on in {@code w} (true attackers, false defenders, null none): a player for their own nation
+     * when it is in the war, a guard for its nation, anyone else as the API's combatant resolvers say.
+     */
+    public static Boolean sideOf(NWSavedData data, War w, LivingEntity e) {
+        if (e instanceof Player pl) {
+            if (pl.isSpectator()) return null;
+            Nation n = data.politics.nationOfPlayer(pl.getUUID());
+            if (n != null && w.involves(n.id)) return w.sideOf(n.id);
+        } else if (e instanceof GuardEntity g) {
+            return g.nation() == null ? null : w.sideOf(g.nation());
+        }
+        UUID other = WarApi.combatantNation(e);
+        return other == null ? null : w.sideOf(other);
+    }
+
+    /** The nation {@code e} fights for in {@code w} (see {@link #sideOf}), or null. */
+    private static UUID nationIn(NWSavedData data, War w, LivingEntity e) {
+        if (e instanceof Player pl) {
+            Nation n = data.politics.nationOfPlayer(pl.getUUID());
+            if (n != null && w.involves(n.id)) return n.id;
+        } else if (e instanceof GuardEntity g) {
+            return g.nation() != null && w.involves(g.nation()) ? g.nation() : null;
+        }
+        UUID other = WarApi.combatantNation(e);
+        return other != null && w.involves(other) ? other : null;
     }
 
     // --- actions -----------------------------------------------------------------------------------------------------------
@@ -179,24 +214,40 @@ public final class WarService {
 
     /** Declares war; {@code pay} takes the price from the attacker's bank (NPC nations declare for free). */
     public static Result declare(MinecraftServer server, Nation attacker, Nation defender, boolean pay) {
+        return declare(server, attacker, defender, WarApi.WarOptions.ordinary(pay), false);
+    }
+
+    /**
+     * Declares war. {@code byProvider}: a managed nation's provider is declaring (through {@code WarApi}), so the managed
+     * locks do not apply; otherwise a managed nation is only declared on when its provider allows it, and never declares.
+     */
+    public static Result declare(MinecraftServer server, Nation attacker, Nation defender, WarApi.WarOptions o, boolean byProvider) {
         NWSavedData data = NW.data(server);
         long now = server.overworld().getGameTime();
-        Result ok = WarRules.canDeclare(data.politics, data.wars.values(), data.lastWar, attacker, defender, now, NWConfig.minutes(NWConfig.WAR_COOLDOWN_MINUTES));
+        if (!byProvider && (attacker.managed() || defender.managed() && !ManagedNations.of(defender).mayBeDeclaredOn(server, defender, attacker)))
+            return Result.fail("war.managed");
+        long cooldown = o.ignoreCooldown() ? 0 : NWConfig.minutes(NWConfig.WAR_COOLDOWN_MINUTES);
+        Result ok = WarRules.canDeclare(data.politics, data.wars.values(), data.lastWar, attacker, defender, now, cooldown);
         if (!ok.ok()) return ok;
         int cost = NWConfig.get(NWConfig.WAR_COST);
-        if (pay && attacker.bank < cost) return Result.fail("nation_poor", cost);
-        if (pay) attacker.bank -= cost;
+        if (o.pay() && attacker.bank < cost) return Result.fail("nation_poor", cost);
+        if (net.neoforged.neoforge.common.NeoForge.EVENT_BUS.post(new WarEvent.Declare(server, attacker, defender, o)).isCanceled())
+            return Result.fail("war.vetoed");
+        if (o.pay()) attacker.bank -= cost;
         if (defender.npc) defender.addOpinion(attacker.id, -40);
         War w = new War(UUID.randomUUID(), attacker.id, defender.id);
         WarRules.gatherSides(data.politics, w);
         w.declared = now;
-        w.activeAt = now + NWConfig.minutes(NWConfig.PREPARATION_MINUTES);
-        w.deadline = w.activeAt + NWConfig.minutes(NWConfig.DURATION_MINUTES);
+        w.activeAt = now + (o.preparation() >= 0 ? o.preparation() : NWConfig.minutes(NWConfig.PREPARATION_MINUTES));
+        w.deadline = w.activeAt + (o.duration() > 0 ? o.duration() : NWConfig.minutes(NWConfig.DURATION_MINUTES));
+        w.targetScore = Math.max(0, o.targetScore());
+        w.reason = o.reasonKey() == null ? "" : o.reasonKey();
         if (w.activeAt <= now) w.phase = War.Phase.ACTIVE;
         data.wars.put(w.id, w);
         NW.changed(server);
-        Notices.toAll(server, NoticePayload.Kind.WAR, Component.translatable("nationsandwar.notice.war_declared"),
+        Notices.toAll(server, NoticePayload.Kind.WAR, w.reason.isEmpty() ? Component.translatable("nationsandwar.notice.war_declared") : Component.translatable(w.reason),
                 Component.translatable("nationsandwar.notice.vs", attacker.name, defender.name), attacker.color, "war");
+        ApiEvents.queue(new WarEvent.Started(server, w));
         return Result.ok("war.declared", defender.name);
     }
 
@@ -222,7 +273,9 @@ public final class WarService {
         if (running >= NWConfig.get(NWConfig.MAX_SIEGES)) return Result.fail("siege.too_many", NWConfig.get(NWConfig.MAX_SIEGES));
         if (!onFront(pol, w, town, chunk)) return Result.fail("siege.not_front");
         Nation defender = pol.nations.get(town.nation);
-        if (!npcPlacer && !defender.npc) {
+        Nation placer = pol.nations.get(placerNation);
+        if (town.managed() && placer != null && !ManagedNations.of(town).mayBesiege(server, town, chunk, placer)) return Result.fail("siege.managed");
+        if (!npcPlacer && !defender.alwaysDefended()) {
             int online = 0;
             for (UUID n : side ? w.defenders : w.attackers) {
                 Nation dn = pol.nations.get(n);
@@ -238,7 +291,16 @@ public final class WarService {
         Component sub = Component.literal(town.name + " ← " + (besieger == null ? "?" : besieger.name));
         notifySides(server, w, Component.translatable("nationsandwar.notice.siege_started"), sub, besieger == null ? 0xFF5555 : besieger.color, "siege");
         NpcService.siegeStarted(server, w, s);
+        ApiEvents.queue(new WarEvent.SiegeStarted(server, w, s));
         return Result.ok("siege.started", town.name);
+    }
+
+    /** A banner planted for the API: its block goes in the war's restore log like a player's. */
+    public static void logPlanted(ServerLevel level, BlockPos pos, net.minecraft.world.level.block.state.BlockState before) {
+        NWSavedData data = NW.data(level.getServer());
+        Town town = NW.townAt(level, pos);
+        War w = town == null ? null : warZone(data, town, NW.chunk(pos));
+        if (w != null) data.restoreLog(w.id).record(level, pos, before);
     }
 
     /** A chunk may be besieged if it touches land that is not the town's, or a chunk of it already occupied. */
@@ -273,23 +335,51 @@ public final class WarService {
         MinecraftServer server = level.getServer();
         NWSavedData data = NW.data(server);
         Town town = NW.townAt(level, pos);
-        Nation mine = data.politics.nationOfPlayer(player.getUUID());
-        if (town == null || town.core != pos.asLong() || mine == null || town.nation == null) return false;
-        War w = activeWar(data, mine.id, town.nation);
+        if (town == null || town.core != pos.asLong() || town.nation == null) return false;
+        War w = null;
+        UUID mineId = null;
+        for (War x : data.wars.values()) {
+            if (x.phase != War.Phase.ACTIVE || !x.involves(town.nation)) continue;
+            UUID n = nationIn(data, x, player);
+            if (n != null && x.enemies(n, town.nation)) {
+                w = x;
+                mineId = n;
+                break;
+            }
+        }
         if (w == null || !w.coreOpen.contains(town.id) || w.fallen.contains(town.id)) return false;
         int hits = w.coreDamage.merge(town.id, 1, Integer::sum);
         int need = NWConfig.get(NWConfig.CORE_HITS);
         level.playSound(null, pos, SoundEvents.ANVIL_LAND, SoundSource.BLOCKS, 1f, 0.6f + 0.4f * hits / need);
         level.sendParticles(ParticleTypes.LAVA, pos.getX() + 0.5, pos.getY() + 0.8, pos.getZ() + 0.5, 8, 0.3, 0.3, 0.3, 0);
         if (hits >= need) {
-            w.fallen.add(town.id);
-            w.coreOpen.remove(town.id);
-            w.score(w.sideOf(mine.id), NWConfig.get(NWConfig.CORE_POINTS));
-            notifySides(server, w, Component.translatable("nationsandwar.notice.town_fell"), Component.literal(town.name), mine.color, "skull");
+            fall(server, w, town, mineId);
         } else {
             player.displayClientMessage(Component.translatable("nationsandwar.msg.core_hit", hits, need), true);
         }
         NW.changed(server);
+        return true;
+    }
+
+    /** {@code town}'s heart is taken by {@code byNation}: fallen, the Core's points, the notices. */
+    private static void fall(MinecraftServer server, War w, Town town, UUID byNation) {
+        w.fallen.add(town.id);
+        w.coreOpen.remove(town.id);
+        w.coreDamage.remove(town.id);
+        Boolean side = w.sideOf(byNation);
+        if (side != null) w.score(side, NWConfig.get(NWConfig.CORE_POINTS));
+        Nation by = NW.pol(server).nations.get(byNation);
+        notifySides(server, w, Component.translatable("nationsandwar.notice.town_fell"), Component.literal(town.name), by == null ? 0xFF5555 : by.color, "skull");
+        ApiEvents.queue(new WarEvent.TownFallen(server, w, town, byNation));
+        NW.changed(server);
+    }
+
+    /** The API's way to take a town with no Core block (see {@code WarApi.townFallen}). */
+    public static boolean townFallen(MinecraftServer server, War w, UUID townId, UUID byNation) {
+        Town town = NW.pol(server).towns.get(townId);
+        if (town == null || w.phase != War.Phase.ACTIVE || !w.coreOpen.contains(townId) || w.fallen.contains(townId)
+                || town.nation == null || !w.enemies(byNation, town.nation)) return false;
+        fall(server, w, town, byNation);
         return true;
     }
 
@@ -308,6 +398,7 @@ public final class WarService {
                 case PREPARATION -> {
                     if (now >= w.activeAt) {
                         w.phase = War.Phase.ACTIVE;
+                        ApiEvents.queue(new WarEvent.PhaseChanged(server, w, War.Phase.PREPARATION));
                         NW.changed(server);
                         notifySides(server, w, Component.translatable("nationsandwar.notice.war_active"), sidesName(data.politics, w), 0xFF5555, "war");
                     }
@@ -349,13 +440,7 @@ public final class WarService {
         Set<UUID> besiegers = s.byAttackers ? w.attackers : w.defenders, holders = s.byAttackers ? w.defenders : w.attackers;
         int r = NWConfig.get(NWConfig.SIEGE_RADIUS), a = 0, d = 0;
         for (LivingEntity e : level.getEntitiesOfClass(LivingEntity.class, new AABB(banner).inflate(r), LivingEntity::isAlive)) {
-            UUID nation = null;
-            if (e instanceof Player pl && !pl.isSpectator()) {
-                Nation n = data.politics.nationOfPlayer(pl.getUUID());
-                nation = n == null ? null : n.id;
-            } else if (e instanceof GuardEntity g) {
-                nation = g.nation();
-            }
+            UUID nation = nationIn(data, w, e);
             if (nation == null) continue;
             if (besiegers.contains(nation)) a++;
             else if (holders.contains(nation)) d++;
@@ -374,6 +459,8 @@ public final class WarService {
                 if (home) w.coreOpen.add(town.id);
                 notifySides(server, w, Component.translatable(home ? "nationsandwar.notice.core_exposed" : "nationsandwar.notice.chunk_taken"),
                         Component.literal(town.name), 0xFFAA00, home ? "skull" : "flag");
+                ApiEvents.queue(new WarEvent.ChunkTaken(server, w, town, s.chunk, s.byAttackers));
+                if (home) ApiEvents.queue(new WarEvent.CoreOpened(server, w, town, s.byAttackers));
             }
             NW.changed(server);
         } else if (s.control <= -1) {
@@ -389,12 +476,14 @@ public final class WarService {
     public static void death(LivingDeathEvent event) {
         if (!(event.getEntity() instanceof ServerPlayer victim) || !(event.getSource().getEntity() instanceof ServerPlayer killer)) return;
         NWSavedData data = NW.data(victim.getServer());
-        Nation a = data.politics.nationOfPlayer(killer.getUUID()), b = data.politics.nationOfPlayer(victim.getUUID());
-        if (a == null || b == null) return;
-        War w = activeWar(data, a.id, b.id);
-        if (w == null) return;
-        w.score(w.sideOf(a.id), NWConfig.get(NWConfig.KILL_POINTS));
-        NW.changed(victim.getServer());
+        for (War w : data.wars.values()) {
+            if (w.phase != War.Phase.ACTIVE) continue;
+            Boolean a = sideOf(data, w, killer), b = sideOf(data, w, victim);
+            if (a == null || b == null || a.equals(b)) continue;
+            w.score(a, NWConfig.get(NWConfig.KILL_POINTS));
+            NW.changed(victim.getServer());
+            return;
+        }
     }
 
     // --- the end -----------------------------------------------------------------------------------------------------------
@@ -415,21 +504,61 @@ public final class WarService {
         w.outcome = outcome;
         long now = server.overworld().getGameTime();
         data.lastWar.put(WarRules.pair(w.attacker, w.defender), now);
-        Nation att = pol.nations.get(w.attacker), def = pol.nations.get(w.defender);
+        War.Phase before = w.phase;
         if (outcome == War.Outcome.WHITE_PEACE || w.winner() == null || pol.nations.get(w.loser()) == null) {
             w.phase = War.Phase.ENDED;
             notifySides(server, w, Component.translatable("nationsandwar.notice.white_peace"), sidesName(pol, w), 0xFFFFFF, "handshake");
+            ApiEvents.queue(new WarEvent.PhaseChanged(server, w, before));
+            ApiEvents.queue(new WarEvent.Ended(server, w));
+            ApiEvents.queue(new WarEvent.TreatyApplied(server, w, null));
         } else {
             Nation loser = pol.nations.get(w.loser());
-            w.terms = Treaty.defaults(w, loser.bank, NWConfig.get(NWConfig.TRIBUTE_SHARE), loser.capital, NWConfig.get(NWConfig.VASSAL_DAYS));
+            Nation winner = pol.nations.get(w.winner());
             w.phase = War.Phase.TREATY;
             w.treatyUntil = now + NWConfig.minutes(NWConfig.TREATY_MINUTES);
-            Nation winner = pol.nations.get(w.winner());
             notifySides(server, w, Component.translatable("nationsandwar.notice.war_won"), Component.literal(winner == null ? "?" : winner.name),
                     winner == null ? 0xFFD700 : winner.color, "crown");
-            if (winner != null && winner.npc) applyTreaty(server, w);
+            ApiEvents.queue(new WarEvent.PhaseChanged(server, w, before));
+            ApiEvents.queue(new WarEvent.Ended(server, w));
+            if (loser.managed()) {
+                // A managed loser is never annexed, taxed or made a vassal: its provider says what becomes of its fallen towns.
+                w.terms = new Treaty();
+                settleManagedLoser(server, w, loser, winner);
+                applyTreaty(server, w);
+            } else {
+                w.terms = Treaty.defaults(w, loser.bank, NWConfig.get(NWConfig.TRIBUTE_SHARE), loser.capital, NWConfig.get(NWConfig.VASSAL_DAYS));
+                if (winner != null && winner.managed()) {
+                    Treaty asked = ManagedNations.of(winner).termsWhenWinning(server, w, winner, loser);
+                    if (asked != null) w.terms = asked;
+                    else w.terms.annex.clear();
+                    applyTreaty(server, w);
+                } else if (winner != null && winner.npc) {
+                    applyTreaty(server, w);
+                }
+            }
         }
         NW.changed(server);
+    }
+
+    /** The fallen towns of a managed loser: razed, handed over or kept, as its provider says. */
+    private static void settleManagedLoser(MinecraftServer server, War w, Nation loser, Nation winner) {
+        Politics pol = NW.pol(server);
+        ManagedNationProvider provider = ManagedNations.of(loser);
+        for (UUID id : new ArrayList<>(w.fallen)) {
+            Town town = pol.towns.get(id);
+            if (town == null || !loser.towns.contains(id) || winner == null) continue;
+            switch (provider.onFallen(server, w, loser, town, winner)) {
+                case RAZE -> org.papiricoh.nationsandwar.api.NationsAndWarApi.raze(server, town);
+                case TRANSFER -> {
+                    if (id.equals(loser.capital) && loser.towns.size() == 1) continue;
+                    pol.detachTown(loser, town);
+                    town.managedBy = winner.managedBy;
+                    pol.attachTown(winner, town);
+                }
+                case KEEP -> {
+                }
+            }
+        }
     }
 
     /** Applies the treaty's terms (annexation, tribute, vassalage) and closes the war. */
@@ -454,7 +583,12 @@ public final class WarService {
             notifySides(server, w, Component.translatable("nationsandwar.notice.treaty_signed"),
                     Component.translatable("nationsandwar.notice.treaty_terms", t.annex.size(), tribute, t.vassalDays), winner.color, "scroll");
         }
+        War.Phase before = w.phase;
         w.phase = War.Phase.ENDED;
+        if (before != War.Phase.ENDED) {
+            ApiEvents.queue(new WarEvent.PhaseChanged(server, w, before));
+            ApiEvents.queue(new WarEvent.TreatyApplied(server, w, t));
+        }
         NW.changed(server);
     }
 

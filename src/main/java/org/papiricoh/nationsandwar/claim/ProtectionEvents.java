@@ -1,5 +1,9 @@
 package org.papiricoh.nationsandwar.claim;
 
+import org.papiricoh.nationsandwar.api.ProtectionBypass;
+import org.papiricoh.nationsandwar.api.ProtectionBypass.Bypass;
+import org.papiricoh.nationsandwar.api.WarApi;
+
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
@@ -73,6 +77,9 @@ import java.util.UUID;
  */
 @EventBusSubscriber(modid = NationsAndWar.MODID)
 public final class ProtectionEvents {
+    // Another mod's zones (boss arenas) switch protections off: ProtectionBypass.bypassed is asked first in every handler,
+    // before the war allowance, so nothing done inside a zone goes in a war's restore log.
+
     private static final Map<UUID, Long> LAST_WARNING = new HashMap<>();
 
     private ProtectionEvents() {
@@ -117,7 +124,7 @@ public final class ProtectionEvents {
             }
         }
         Town town = NW.townAt(level, pos);
-        if (town == null) return;
+        if (town == null || ProtectionBypass.bypassed(level, pos, Bypass.DESTROY)) return;
         if (state.is(NWRegistry.SIEGE_BANNER.get()) && WarService.fightsHere(level.getServer(), player.getUUID(), town, NW.chunk(pos)) != null) {
             WarService.bannerBroken(level, pos);
             return;
@@ -136,15 +143,14 @@ public final class ProtectionEvents {
         Entity entity = event.getEntity();
         if (event.getPlacedBlock().is(NWRegistry.SIEGE_BANNER.get())) {
             if (!(entity instanceof ServerPlayer sp)) return;
-            Nation n = NW.pol(level.getServer()).nationOfPlayer(sp.getUUID());
-            Result r = WarService.plantBanner(level, pos, n == null ? null : n.id, false);
+            Result r = WarService.plantBanner(level, pos, bannerNation(level, pos, sp), false);
             if (!r.ok()) event.setCanceled(true);
             NW.reply(sp, r);
             if (r.ok()) logChange(level, pos, event.getBlockSnapshot().getState());
             return;
         }
         Town town = NW.townAt(level, pos);
-        if (town == null) return;
+        if (town == null || ProtectionBypass.bypassed(level, pos, Bypass.BUILD)) return;
         if (!(entity instanceof Player player)) {
             if (entity != null && !(entity instanceof net.minecraft.world.entity.npc.Villager)) event.setCanceled(true);
             return;
@@ -154,6 +160,19 @@ public final class ProtectionEvents {
             event.setCanceled(true);
             deny(player, town, ChunkPerms.Action.BUILD);
         }
+    }
+
+    /**
+     * The nation a player plants a banner for: their own when it is at war with the town's, else the one the API's
+     * combatant resolvers name (a player serving a managed nation).
+     */
+    private static UUID bannerNation(ServerLevel level, BlockPos pos, ServerPlayer sp) {
+        var data = NW.data(level.getServer());
+        Nation n = data.politics.nationOfPlayer(sp.getUUID());
+        Town town = NW.townAt(level, pos);
+        if (n != null && (town == null || town.nation == null || WarService.activeWar(data, n.id, town.nation) != null)) return n.id;
+        UUID other = WarApi.combatantNation(sp);
+        return other != null ? other : n == null ? null : n.id;
     }
 
     /** In a war zone a fighter may build and break; the block's prior state is logged first. */
@@ -197,7 +216,8 @@ public final class ProtectionEvents {
         if (town == null) return;
         BlockState state = level.getBlockState(pos);
         ChunkPerms.Action action = actionFor(level, pos, state);
-        if (action != null && !allowed(player, level, pos, action)) {
+        if (action != null && !ProtectionBypass.bypassed(level, pos, action == ChunkPerms.Action.SWITCH ? Bypass.SWITCH : Bypass.CONTAINER)
+                && !allowed(player, level, pos, action)) {
             event.setUseBlock(TriState.FALSE);
             deny(player, town, action);
         }
@@ -205,7 +225,7 @@ public final class ProtectionEvents {
         if (isUseItem(held)) {
             BlockPos target = pos.relative(event.getFace() == null ? net.minecraft.core.Direction.UP : event.getFace());
             Town t2 = NW.townAt(level, target);
-            if (t2 != null && !allowed(player, level, target, ChunkPerms.Action.ITEM_USE)) {
+            if (t2 != null && !ProtectionBypass.bypassed(level, target, Bypass.ITEM_USE) && !allowed(player, level, target, ChunkPerms.Action.ITEM_USE)) {
                 event.setUseItem(TriState.FALSE);
                 deny(player, t2, ChunkPerms.Action.ITEM_USE);
             }
@@ -221,7 +241,7 @@ public final class ProtectionEvents {
         if (!(hit instanceof BlockHitResult bh) || hit.getType() != HitResult.Type.BLOCK) return;
         BlockPos pos = bh.getBlockPos();
         Town town = NW.townAt(level, pos);
-        if (town != null && !allowed(player, level, pos, ChunkPerms.Action.ITEM_USE)) {
+        if (town != null && !ProtectionBypass.bypassed(level, pos, Bypass.ITEM_USE) && !allowed(player, level, pos, ChunkPerms.Action.ITEM_USE)) {
             event.setCanceled(true);
             deny(player, town, ChunkPerms.Action.ITEM_USE);
         }
@@ -248,7 +268,7 @@ public final class ProtectionEvents {
     public static void trample(BlockEvent.FarmlandTrampleEvent event) {
         if (!(event.getLevel() instanceof Level level) || level.isClientSide) return;
         Town town = NW.townAt(level, event.getPos());
-        if (town == null) return;
+        if (town == null || ProtectionBypass.bypassed(level, event.getPos(), Bypass.DESTROY)) return;
         if (!(event.getEntity() instanceof Player p) || !allowed(p, level, event.getPos(), ChunkPerms.Action.DESTROY)) event.setCanceled(true);
     }
 
@@ -261,6 +281,7 @@ public final class ProtectionEvents {
                 || target instanceof Boat)) return;
         Town town = NW.townAt(event.getLevel(), target.blockPosition());
         ChunkPerms.Action action = target instanceof ArmorStand || target instanceof HangingEntity ? ChunkPerms.Action.CONTAINER : ChunkPerms.Action.SWITCH;
+        if (ProtectionBypass.bypassed(event.getLevel(), target.blockPosition(), action == ChunkPerms.Action.SWITCH ? Bypass.SWITCH : Bypass.CONTAINER)) return;
         if (town != null && !allowed(event.getEntity(), event.getLevel(), target.blockPosition(), action)) {
             event.setCanceled(true);
             deny(event.getEntity(), town, action);
@@ -273,7 +294,7 @@ public final class ProtectionEvents {
         Player player = event.getEntity();
         if (player.level().isClientSide || target instanceof Player || target instanceof Enemy) return;
         Town town = NW.townAt(player.level(), target.blockPosition());
-        if (town == null) return;
+        if (town == null || ProtectionBypass.bypassed(player.level(), target.blockPosition(), Bypass.ATTACK)) return;
         if (target instanceof LivingEntity && !(target instanceof ArmorStand) && target.getType().getCategory() == MobCategory.MONSTER) return;
         if (target instanceof org.papiricoh.nationsandwar.npc.GuardEntity) return;
         if (!allowed(player, player.level(), target.blockPosition(), ChunkPerms.Action.DESTROY)) {
@@ -290,9 +311,13 @@ public final class ProtectionEvents {
         MinecraftServer server = victim.getServer();
         Politics pol = NW.pol(server);
         Town town = NW.townAt(victim.level(), victim.blockPosition());
-        if (town == null || town.flag(Flag.PVP, NW.chunk(victim.blockPosition()))) return;
-        Nation a = pol.nationOfPlayer(attacker.getUUID()), v = pol.nationOfPlayer(victim.getUUID());
-        if (a != null && v != null && WarService.activeWar(NW.data(server), a.id, v.id) != null) return;
+        if (town == null || town.flag(Flag.PVP, NW.chunk(victim.blockPosition())) || ProtectionBypass.bypassed(victim.level(), victim.blockPosition(), Bypass.PVP)) return;
+        var data = NW.data(server);
+        for (War w : data.wars.values()) {
+            if (w.phase != War.Phase.ACTIVE) continue;
+            Boolean a = WarService.sideOf(data, w, attacker), v = WarService.sideOf(data, w, victim);
+            if (a != null && v != null && !a.equals(v)) return;
+        }
         event.setCanceled(true);
     }
 
@@ -301,36 +326,39 @@ public final class ProtectionEvents {
         if (!(event.getLevel() instanceof ServerLevel level)) return;
         MobSpawnType type = event.getSpawnType();
         if (type != MobSpawnType.NATURAL && type != MobSpawnType.PATROL && type != MobSpawnType.REINFORCEMENT && type != MobSpawnType.CHUNK_GENERATION) return;
-        if (!(event.getEntity() instanceof Enemy)) return;
+        if (!(event.getEntity() instanceof Enemy) || ProtectionBypass.exempt(event.getEntity())) return;
         BlockPos pos = BlockPos.containing(event.getX(), event.getY(), event.getZ());
         Town town = NW.townAt(level.getLevel(), pos);
-        if (town != null && !town.flag(Flag.MOBS, NW.chunk(pos))) event.setSpawnCancelled(true);
+        if (town != null && !town.flag(Flag.MOBS, NW.chunk(pos)) && !ProtectionBypass.bypassed(level.getLevel(), pos, Bypass.SPAWNS)) event.setSpawnCancelled(true);
     }
 
     @SubscribeEvent
     public static void grief(EntityMobGriefingEvent event) {
         Entity e = event.getEntity();
-        if (e == null || e.level().isClientSide || !(e instanceof Enemy)) return;
+        if (e == null || e.level().isClientSide || !(e instanceof Enemy) || ProtectionBypass.exempt(e)) return;
         Town town = NW.townAt(e.level(), e.blockPosition());
-        if (town != null && !town.flag(Flag.EXPLOSIONS, NW.chunk(e.blockPosition()))) event.setCanGrief(false);
+        if (town != null && !town.flag(Flag.EXPLOSIONS, NW.chunk(e.blockPosition())) && !ProtectionBypass.bypassed(e.level(), e.blockPosition(), Bypass.MOB_GRIEFING))
+            event.setCanGrief(false);
     }
 
     @SubscribeEvent
     public static void explosion(ExplosionEvent.Detonate event) {
         Level level = event.getLevel();
         if (level.isClientSide) return;
+        boolean exempt = ProtectionBypass.exempt(event.getExplosion().getDirectSourceEntity()) || ProtectionBypass.exempt(event.getExplosion().getIndirectSourceEntity());
         event.getAffectedBlocks().removeIf(pos -> {
             Town town = NW.townAt(level, pos);
             if (town == null) return false;
             if (level.getBlockState(pos).is(NWRegistry.TOWN_CORE.get())) return true;
+            if (exempt || ProtectionBypass.bypassed(level, pos, Bypass.EXPLOSIONS)) return false;
             return !town.flag(Flag.EXPLOSIONS, NW.chunk(pos));
         });
-        event.getAffectedEntities().removeIf(e -> !(e instanceof LivingEntity) || e instanceof ArmorStand ? protectedEntity(level, e) : false);
+        if (!exempt) event.getAffectedEntities().removeIf(e -> !(e instanceof LivingEntity) || e instanceof ArmorStand ? protectedEntity(level, e) : false);
     }
 
     private static boolean protectedEntity(Level level, Entity e) {
         Town town = NW.townAt(level, e.blockPosition());
-        return town != null && !town.flag(Flag.EXPLOSIONS, NW.chunk(e.blockPosition()));
+        return town != null && !town.flag(Flag.EXPLOSIONS, NW.chunk(e.blockPosition())) && !ProtectionBypass.bypassed(level, e.blockPosition(), Bypass.EXPLOSIONS);
     }
 
     /** Pistons may not move blocks across a border between owners. */
@@ -338,7 +366,7 @@ public final class ProtectionEvents {
     public static void piston(PistonEvent.Pre event) {
         if (!(event.getLevel() instanceof Level level) || level.isClientSide) return;
         var helper = event.getStructureHelper();
-        if (helper == null || !helper.resolve()) return;
+        if (helper == null || ProtectionBypass.bypassed(level, event.getPos(), Bypass.PISTONS) || !helper.resolve()) return;
         UUID owner = ownerAt(level, event.getPos());
         var dir = event.getPistonMoveType() == PistonEvent.PistonMoveType.EXTEND ? event.getDirection() : event.getDirection().getOpposite();
         for (BlockPos p : helper.getToPush()) {
@@ -362,7 +390,7 @@ public final class ProtectionEvents {
 
     /** Fire may not burn or spread in a town chunk with fire off (called from the FireBlock mixin). */
     public static boolean fireBlocked(Level level, BlockPos pos) {
-        if (level.isClientSide || level.getServer() == null) return false;
+        if (level.isClientSide || level.getServer() == null || ProtectionBypass.bypassed(level, pos, Bypass.FIRE)) return false;
         Town town = NW.pol(level.getServer()).townAt(NW.dim(level), ChunkPos.asLong(pos.getX() >> 4, pos.getZ() >> 4));
         return town != null && !town.flag(Flag.FIRE, NW.chunk(pos));
     }

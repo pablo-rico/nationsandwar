@@ -303,6 +303,23 @@ gui = [
 for g_, en, es in gui:
     k(f"nationsandwar.gui.{g_}", en, es)
 
+# --- API v0.2: nations run by other mods, reserved land, vetoed wars ----------------------------------------------------
+for key_, en, es in [
+    ("managed", "That nation is run by another mod.", "Esa nación la gestiona otro mod."),
+    ("claim_reserved", "This land is reserved.", "Esta tierra está reservada."),
+    ("war.managed", "That nation cannot be declared on.", "No se puede declarar la guerra a esa nación."),
+    ("war.vetoed", "Something forbids this war.", "Algo prohíbe esta guerra."),
+    ("siege.managed", "That ground cannot be besieged.", "Ese terreno no se puede asediar."),
+]:
+    k(f"nationsandwar.msg.{key_}", en, es)
+k("nationsandwar.managed.description", "This nation is run by another mod. Its people and ranks are shown there.",
+  "Esta nación la gestiona otro mod. Su gente y sus rangos se muestran allí.")
+k("nationsandwar.managed.open", "Open", "Abrir")
+k("nationsandwar.managed.cannot_open", "You cannot open it right now.", "Ahora mismo no puedes abrirlo.")
+k("nationsandwar.managed.badge", "Managed", "Gestionada")
+k("nationsandwar.managed.inspect", "Click: inspect", "Clic: inspeccionar")
+k("nationsandwar.notice.badge.managed", "MANAGED", "GESTIONADA")
+
 def write(name, i):
     path = os.path.join(OUT, name)
     os.makedirs(OUT, exist_ok=True)

@@ -101,7 +101,7 @@ public final class NpcService {
         NWSavedData data = NW.data(server);
         Politics pol = data.politics;
         String dim = NW.dim(level);
-        if (pol.townAt(dim, at.toLong()) != null) return null;
+        if (pol.townAt(dim, at.toLong()) != null || pol.claimVeto.test(dim, at.toLong())) return null;
         BlockPos core = corePos(level, at);
         int radius = NWConfig.get(NWConfig.VILLAGE_RADIUS);
         Town town = pol.foundNpcTown(name, dim, at.toLong(), core.asLong(), radius, level.getGameTime());
@@ -223,17 +223,11 @@ public final class NpcService {
     private static void ally(Politics pol, Nation a, Nation b) {
         if (b.alliance != null) {
             Alliance al = pol.alliances.get(b.alliance);
-            if (al != null && a.alliance == null) {
-                al.members.add(a.id);
-                a.alliance = al.id;
-            }
+            if (al != null && a.alliance == null) pol.addToAlliance(al, a);
         } else if (a.alliance == null) {
             pol.createAlliance(null, a, NameGen.nation(a.id.getLeastSignificantBits()) + " Pact");
             Alliance al = pol.alliances.get(a.alliance);
-            if (al != null) {
-                al.members.add(b.id);
-                b.alliance = al.id;
-            }
+            if (al != null) pol.addToAlliance(al, b);
         }
     }
 
@@ -265,7 +259,7 @@ public final class NpcService {
                     int cx = ChunkPos.getX(c), cz = ChunkPos.getZ(c);
                     if (!level.hasChunk(cx, cz) || w.isOccupied(t.id, c) || !frontier(t, w, c)) continue;
                     BlockPos centre = new ChunkPos(cx, cz).getMiddleBlockPosition(0);
-                    if (level.getNearestPlayer(centre.getX(), 64, centre.getZ(), 128, false) == null && !enemy.npc) continue;
+                    if (level.getNearestPlayer(centre.getX(), 64, centre.getZ(), 128, false) == null && !enemy.alwaysDefended()) continue;
                     BlockPos banner = surface(level, centre);
                     data.restoreLog(w.id).record(level, banner, level.getBlockState(banner));
                     level.setBlockAndUpdate(banner, NWRegistry.SIEGE_BANNER.get().defaultBlockState());
@@ -337,8 +331,7 @@ public final class NpcService {
                     if (!r.ok()) return r;
                 }
                 Alliance al = pol.alliances.get(mine.alliance);
-                al.members.add(npc.id);
-                npc.alliance = al.id;
+                pol.addToAlliance(al, npc);
                 return Result.ok("npc.alliance_accepted", npc.name);
             }
             case "ask_peace": {

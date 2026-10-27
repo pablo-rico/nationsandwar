@@ -16,8 +16,8 @@ Code, comments and identifiers are written **in English**. The game ships in **E
   - Brief agents with `docs/CONTRACT.md` instead of having them re-read the server.
   - Cap their preview rounds.
 - Every change must leave these green:
-  - `./gradlew build` (compile + 28 JUnit tests).
-  - `./gradlew runGameTestServer` (6 GameTests).
+  - `./gradlew build` (compile + 34 JUnit tests).
+  - `./gradlew runGameTestServer` (9 GameTests).
   - Run only one Gradle at a time.
 - Look at the result in the game (preview harness, below) before saying something "looks right".
 
@@ -36,6 +36,7 @@ Code, comments and identifiers are written **in English**. The game ships in **E
 | `view/` | Records shared server↔client (`Briefs`, `SiegeBrief`, `PoliticsView`) with their NBT. |
 | `client/` | Mirrors `ClientClaims` / `ClientPolitics`; `screen/` (management GUI with tabs, `tab/RoleTree` 2.5D tree), `gui/` (`Draw`, `Ui`, `Skins`), `notice/` (cards at top centre, `TerritoryWatcher`, `SiegePanel`), `render/` (guard/envoy + tinted `TabardLayer`), `dev/` (preview harness). |
 | `compat/` | `MapStyle` (shared colours/states), `journeymap/NWJourneyMapPlugin` (`PolygonOverlay`s), `xaero/` (highlighters injected by `mixin/xaero/*`). |
+| `api/` | **The API for other mods (v0.2, see `docs/API.md`)**: `NationsAndWarApi` (reads, managed nations/towns), `ManagedNations` + `ManagedNationProvider`, `WarApi` (declare, score, `townFallen`, banners, combatant resolvers), `ProtectionBypass` (zones for boss arenas), `ClaimVetoes`, `event/` (NeoForge events), `client/ManagedNationScreens`. `core/ApiEvents` queues the events (from `model/PoliticsObserver`) and flushes them at the end of the tick. |
 
 ## How to add things
 
@@ -47,6 +48,9 @@ Code, comments and identifiers are written **in English**. The game ships in **E
   5. Add `nationsandwar.msg.<key>` in EN+ES.
   - Permissions are always checked on the server.
 - **Anything that changes politics** calls `NW.changed(server)`. Without it, clients and maps are not refreshed.
+- **A new mutation in `Politics`** reports itself to `observer` (`PoliticsObserver`) after the change; that is how the API's events reach other mods. A new war step queues its `WarEvent` with `ApiEvents.queue`.
+- **Managed nations** (`Nation.managedBy != null`, run by another mod): every rule that lets players join, ally, edit or declare must refuse them (msg `managed`); NPC logic skips them; `Nation.alwaysDefended()` replaces `npc` where "has no citizens" matters. SupernaturalCraft is the first user (the Pit, the Host, SucroCorp).
+- **API changes**: keep `docs/API.md` in step and bump `NationsAndWarApi.VERSION` when callers must adapt.
 - **Text**: every key lives in `tools/lang/genlang.py` (EN, ES). Run `python3 tools/lang/genlang.py`. **Never** edit the lang JSON files by hand.
   - Role names starting with `@` are lang keys; renamed roles keep the literal text.
 - **Art**: pure-Python generators (`tools/artgen/`: `nwart.py` for entities/blocks/items, `guiart.py`, `noticeart.py`). Never download assets.

@@ -188,10 +188,14 @@ public final class WarTab extends Tab {
         if (war.coreOpen().isEmpty() && war.fallen().isEmpty()) g.drawString(font, tr("none"), cx, ry, Draw.MUTED, false);
     }
 
+    /** One nation of a side; a managed one (no leader, no citizens) shows only its name, colour and badge. */
     private int side(GuiGraphics g, PoliticsView v, UUID n, int sx, int sy, int sw, boolean lead) {
+        boolean managed = ClientClaims.managed(n);
+        int bw = managed ? font.width(Component.translatable("nationsandwar.managed.badge")) + 8 : 0;
         g.fill(sx, sy + 1, sx + 5, sy + 7, Draw.opaque(nationColor(v, n)));
-        g.drawString(font, Draw.fit(font, Component.literal(nationName(v, n) + (lead ? " ★" : "")), sw - 10), sx + 8, sy, lead ? Draw.TEXT : Draw.MUTED, false);
-        return sy + 10;
+        g.drawString(font, Draw.fit(font, Component.literal(nationName(v, n) + (lead ? " ★" : "")), sw - 10 - bw), sx + 8, sy, lead ? Draw.TEXT : Draw.MUTED, false);
+        if (managed) managedBadge(g, sx + sw - bw + 2, sy - 1);
+        return sy + 11;
     }
 
     /** A siege's control: the besieger's colour grows from the right as control goes to +1. */

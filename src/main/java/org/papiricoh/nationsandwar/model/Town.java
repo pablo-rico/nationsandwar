@@ -47,12 +47,20 @@ public final class Town {
     public boolean npc, open;
     public final Set<UUID> invites = new LinkedHashSet<>();
     public long founded;
+    /** The provider's key when another mod runs this town (it then has no residents of its own); null otherwise. */
+    public String managedBy;
+    /** Data other mods keep on the town, one key per mod. Saved, never read by this mod. */
+    public CompoundTag ext = new CompoundTag();
 
     public Town(UUID id, String name, String dimension, long homeChunk) {
         this.id = id;
         this.name = name;
         this.dimension = dimension;
         this.homeChunk = homeChunk;
+    }
+
+    public boolean managed() {
+        return managedBy != null;
     }
 
     public TownLevel level() {
@@ -118,6 +126,8 @@ public final class Town {
         t.putBoolean("open", open);
         t.put("invites", Nbt.uuids(invites));
         t.putLong("founded", founded);
+        if (managedBy != null) t.putString("managedBy", managedBy);
+        if (!ext.isEmpty()) t.put("ext", ext.copy());
         return t;
     }
 
@@ -147,6 +157,8 @@ public final class Town {
         town.open = t.getBoolean("open");
         town.invites.addAll(Nbt.uuids(t, "invites"));
         town.founded = t.getLong("founded");
+        if (t.contains("managedBy")) town.managedBy = t.getString("managedBy");
+        if (t.contains("ext")) town.ext = t.getCompound("ext").copy();
         return town;
     }
 }

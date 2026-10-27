@@ -12,7 +12,6 @@ import org.papiricoh.nationsandwar.client.ClientPolitics;
 import org.papiricoh.nationsandwar.client.gui.Draw;
 import org.papiricoh.nationsandwar.client.gui.Ui;
 import org.papiricoh.nationsandwar.client.screen.tab.DiplomacyTab;
-import org.papiricoh.nationsandwar.model.GovernmentType;
 import org.papiricoh.nationsandwar.view.Briefs;
 import org.papiricoh.nationsandwar.view.PoliticsView;
 
@@ -81,8 +80,8 @@ public class EnvoyScreen extends Screen {
         }
         g.drawString(font, Component.translatable(K + "envoy_of"), rx, ry, Draw.MUTED, false);
         g.drawString(font, Draw.fit(font, Component.literal(n.name()), rw - 20), rx, ry + 11, Draw.mix(Draw.opaque(color), 0xFFFFFFFF, 0.35f), true);
-        GovernmentType gt = GovernmentType.byId(n.government());
-        Component gov = Component.translatable(gt.key()).append(" · ").append(Component.translatable(gt.key("leader"))).append(" " + n.leader());
+        String titles = ClientClaims.titles(n.id(), n.government());
+        Component gov = Component.translatable(titles).append(" · ").append(Component.translatable(titles + ".leader")).append(" " + n.leader());
         Draw.text(g, font, Draw.fit(font, gov, (int) (rw / 0.75f)), rx, ry + 23, 0.75f, Draw.MUTED, false);
         ry += 38;
 
