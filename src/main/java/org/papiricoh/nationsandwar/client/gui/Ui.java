@@ -58,6 +58,23 @@ public final class Ui {
         tip = null;
     }
 
+    /**
+     * Starts a new layer on top of what was drawn so far this frame: the zones, scroll zones and tooltip registered until now
+     * are dropped, so the page under a modal is inert. The mouse moves to (x, y) for the new layer.
+     */
+    public void layer(int mouseX, int mouseY) {
+        zones.clear();
+        scrolls.clear();
+        tip = null;
+        mx = mouseX;
+        my = mouseY;
+    }
+
+    /** {@link #layer(int, int)} keeping the mouse where it is. */
+    public void layer() {
+        layer(mx, my);
+    }
+
     // --- clipping ----------------------------------------------------------------------------------------------------------
 
     public void clip(GuiGraphics g, int x, int y, int w, int h) {
@@ -184,6 +201,16 @@ public final class Ui {
         g.fill(x, y, x + w, y + 10, Draw.alpha(color, 0x40));
         Draw.frame(g, x, y, w, 10, Draw.alpha(color, 0xC0));
         g.drawString(font, label, x + 3, y + 1, Draw.mix(Draw.opaque(color), 0xFFFFFFFF, 0.35f), false);
+        return w;
+    }
+
+    /** A small pill drawn at a scale (dense rows such as the Atlas tree). Returns its width. */
+    public float chip(GuiGraphics g, float x, float y, Component label, int color, float scale) {
+        float w = (font.width(label) + 4) * scale, h = 9 * scale;
+        Draw.rect(g, x, y, w, h, Draw.alpha(color, 0x40));
+        Draw.rect(g, x, y, w, scale, Draw.alpha(color, 0xC0));
+        Draw.rect(g, x, y + h - scale, w, scale, Draw.alpha(color, 0xC0));
+        Draw.text(g, font, label, x + 2 * scale, y + 1.2f * scale, scale, Draw.mix(Draw.opaque(color), 0xFFFFFFFF, 0.35f), false);
         return w;
     }
 

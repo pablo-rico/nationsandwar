@@ -4,16 +4,18 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
+import org.lwjgl.glfw.GLFW;
 import org.papiricoh.nationsandwar.client.ClientPolitics;
 import org.papiricoh.nationsandwar.client.NWClient;
 import org.papiricoh.nationsandwar.client.gui.Draw;
 import org.papiricoh.nationsandwar.client.gui.Ui;
+import org.papiricoh.nationsandwar.client.screen.modal.Modal;
+import org.papiricoh.nationsandwar.client.screen.tab.AtlasTab;
 import org.papiricoh.nationsandwar.client.screen.tab.DiplomacyTab;
 import org.papiricoh.nationsandwar.client.screen.tab.MapTab;
 import org.papiricoh.nationsandwar.client.screen.tab.NationTab;
 import org.papiricoh.nationsandwar.client.screen.tab.OverviewTab;
 import org.papiricoh.nationsandwar.client.screen.tab.ProvincesTab;
-import org.papiricoh.nationsandwar.client.screen.tab.RolesTab;
 import org.papiricoh.nationsandwar.client.screen.tab.Tab;
 import org.papiricoh.nationsandwar.client.screen.tab.TownTab;
 import org.papiricoh.nationsandwar.client.screen.tab.WarTab;
@@ -28,7 +30,12 @@ import java.util.function.Consumer;
 /**
  * The management GUI (key N, {@code /nw}): a framed panel with a rail of tabs on the left and the chosen tab's page,
  * drawn every frame from {@link ClientPolitics#view()} so a fresh view from the server shows at once. {@code tab} may
- * name the tab to open ("overview", "town", "roles", "provinces", "nation", "nationroles", "diplomacy", "war", "map").
+ * name the tab to open ("overview", "town", "atlas", "provinces", "nation", "diplomacy", "war", "map"; the old "roles" and
+ * "nationroles" open the Atlas on my town and on my nation).
+ *
+ * <p>Forms live in {@link Modal}s opened with {@link #open}: while one is open the page underneath is drawn inert (mouse
+ * at −1,−1, its text fields hidden) under a dim veil, the modal on top with its own text fields; Esc closes the modal
+ * first and Enter runs its primary action.
  */
 public class NationScreen extends Screen {
     /** What the viewer typed in each field, kept while switching tabs or reopening the screen. */
@@ -40,20 +47,27 @@ public class NationScreen extends Screen {
     private final Consumer<PoliticsView> listener = this::viewChanged;
     private Tab tab;
     private Ui ui;
-    private int px, py, pw, ph;
+    private Modal modal;
+    private int px, py, pw, ph, pendingModal = -1;
 
     public NationScreen(String tab) {
         super(Component.translatable("nationsandwar.gui.title"));
         tabs.add(new OverviewTab(this));
         tabs.add(new TownTab(this));
-        tabs.add(new RolesTab(this, false));
+        tabs.add(new AtlasTab(this));
         tabs.add(new ProvincesTab(this));
         tabs.add(new NationTab(this));
-        tabs.add(new RolesTab(this, true));
         tabs.add(new DiplomacyTab(this));
         tabs.add(new WarTab(this));
         tabs.add(new MapTab(this));
-        this.tab = find(tab == null || tab.isEmpty() ? lastTab : tab);
+        String id = tab == null || tab.isEmpty() ? lastTab : tab;
+        if (id.equals("roles") || id.equals("nationroles")) {
+            boolean nation = id.equals("nationroles");
+            atlas().focusLater(v -> nation ? v.nation() == null ? null : new AtlasTab.Target("nation", v.nation().id())
+                    : v.town() == null ? null : new AtlasTab.Target("town", v.town().id()));
+            id = "atlas";
+        }
+        this.tab = find(id);
     }
 
     private Tab find(String id) {
@@ -63,6 +77,11 @@ public class NationScreen extends Screen {
 
     public Tab current() {
         return tab;
+    }
+
+    /** The Atlas tab (the map tab focuses it on a picked claim). */
+    public AtlasTab atlas() {
+        return (AtlasTab) find("atlas");
     }
 
     public void select(String id) {
@@ -87,6 +106,7 @@ public class NationScreen extends Screen {
         fields.clear();
         for (Tab t : tabs) t.bind(ui, font, px + 32, py + 25, pw - 37, ph - 30);
         tab.init();
+        if (modal != null) for (EditBox b : modal.fields()) addWidget(b);
     }
 
     private void viewChanged(PoliticsView v) {
@@ -95,15 +115,27 @@ public class NationScreen extends Screen {
 
     /** A text field for the current tab; its text survives tab switches. */
     public EditBox field(String key, int maxLength, Component hint, boolean digits) {
+        EditBox b = box(key, maxLength, hint, digits, "");
+        addRenderableWidget(b);
+        fields.add(b);
+        return b;
+    }
+
+    /** A text field for the open modal (see {@link Modal#field}); drawn by hand above the veil. */
+    public EditBox modalField(String key, int maxLength, Component hint, boolean digits, String initial) {
+        EditBox b = box(key, maxLength, hint, digits, initial);
+        addWidget(b);
+        return b;
+    }
+
+    private EditBox box(String key, int maxLength, Component hint, boolean digits, String initial) {
         EditBox b = new EditBox(font, 0, 0, 80, 13, hint);
         b.setMaxLength(maxLength);
-        b.setValue(DRAFTS.getOrDefault(key, ""));
         if (digits) b.setFilter(s -> s.matches("\\d{0,7}"));
+        b.setValue(DRAFTS.getOrDefault(key, initial == null ? "" : initial));
         b.setResponder(s -> DRAFTS.put(key, s));
         b.setHint(hint.copy().withStyle(s -> s.withColor(0x6A7384)));
         b.visible = false;
-        addRenderableWidget(b);
-        fields.add(b);
         return b;
     }
 
@@ -111,12 +143,58 @@ public class NationScreen extends Screen {
         b.setValue("");
     }
 
+    // --- modals ------------------------------------------------------------------------------------------------------------
+
+    /** Opens a modal over the page (replacing any open one). */
+    public void open(Modal m) {
+        if (modal != null) closeModal();
+        modal = m;
+        m.attach(this, ui, font);
+        setFocused(null);
+        for (EditBox b : m.fields()) b.setFocused(false);
+        if (!m.fields().isEmpty()) {
+            EditBox first = m.fields().getFirst();
+            setFocused(first);
+            first.moveCursorToEnd(false);
+        }
+    }
+
+    /** Closes the open modal, if any (its drafts stay). */
+    public void closeModal() {
+        if (modal == null) return;
+        Modal m = modal;
+        modal = null;
+        for (EditBox b : m.fields()) removeWidget(b);
+        setFocused(null);
+        m.onClose();
+    }
+
+    public Modal modal() {
+        return modal;
+    }
+
+    /** For the preview harness: opens the modal behind the {@code index}-th modal button of the page's action bar once it is drawn. */
+    public void previewModal(int index) {
+        pendingModal = index;
+    }
+
+    private void runAction(Modal.Action a) {
+        if (a.denied() != null || a.run() == null) return;
+        Modal m = modal;
+        a.run().run();
+        if (a.closes() && modal == m) {
+            for (String k : m.draftKeys()) DRAFTS.remove(k);
+            closeModal();
+        }
+    }
+
     // --- drawing -----------------------------------------------------------------------------------------------------------
 
     @Override
     public void renderBackground(GuiGraphics g, int mouseX, int mouseY, float partial) {
         g.fill(0, 0, width, height, Draw.DIM);
-        ui.begin(mouseX, mouseY);
+        boolean under = modal != null;
+        ui.begin(under ? -1 : mouseX, under ? -1 : mouseY);
         for (EditBox f : fields) f.visible = false;
         Draw.shadow(g, px, py, pw, ph, 10);
         Draw.slab(g, px, py + 3, pw - 3, ph - 3, 3, 0xFF202733, 0xFF161B22);
@@ -135,6 +213,14 @@ public class NationScreen extends Screen {
             return;
         }
         tab.render(g, v, partial);
+        if (under) for (EditBox f : fields) f.visible = false;
+        if (pendingModal >= 0 && modal == null) {
+            Modal m = tab.previewModal(pendingModal);
+            if (m != null) {
+                pendingModal = -1;
+                open(m);
+            }
+        }
     }
 
     private void drawHeader(GuiGraphics g, PoliticsView v) {
@@ -187,13 +273,74 @@ public class NationScreen extends Screen {
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partial) {
         super.render(g, mouseX, mouseY, partial);
+        PoliticsView v = ClientPolitics.view();
+        if (modal != null && (v == null || !modal.valid(v))) closeModal();
+        if (modal != null) {
+            var pose = g.pose();
+            pose.pushPose();
+            pose.translate(0, 0, 300);
+            ui.layer(mouseX, mouseY);
+            g.fill(0, 0, width, height, 0x9A06080B);
+            drawModal(g, v, mouseX, mouseY, partial);
+            pose.popPose();
+        }
         ui.tooltip(g);
+    }
+
+    /** The open modal: its slab, title bar, body, own text fields and footer. */
+    private void drawModal(GuiGraphics g, PoliticsView v, int mouseX, int mouseY, float partial) {
+        Modal m = modal;
+        int mw = Math.min(m.width(), width - 16), mh = Math.min(m.height(), height - 16);
+        int mx = (width - mw) / 2, my = (height - mh) / 2;
+        Draw.shadow(g, mx, my, mw, mh, 14);
+        Draw.slab(g, mx, my, mw, mh, 4, 0xFF242C38, 0xFF181D25);
+        Draw.frame(g, mx, my, mw, mh, 0xFF0B0E12);
+        g.fillGradient(mx + 1, my + 1, mx + mw - 1, my + Modal.TITLE, 0xFF2E3746, 0xFF222934);
+        g.fill(mx + 1, my + Modal.TITLE, mx + mw - 1, my + Modal.TITLE + 1, 0x80E3B556);
+        Draw.icon(g, m.icon(), mx + 4, my + 2);
+        g.drawString(font, Draw.fit(font, m.title(), mw - 44), mx + 23, my + 6, Draw.GOLD, true);
+        ui.button(g, mx + mw - 17, my + 4, 13, 12, Component.literal("✕"), Ui.Style.NORMAL, null, this::closeModal);
+        for (EditBox b : m.fields()) b.visible = false;
+        m.bind(mx + 8, my + Modal.TITLE + 6, mw - 16, mh - Modal.TITLE - Modal.FOOTER - 8);
+        m.render(g, v, partial);
+        if (modal != m) return;
+        for (EditBox b : m.fields()) if (b.visible) b.render(g, mouseX, mouseY, partial);
+        int fy = my + mh - Modal.FOOTER;
+        g.fill(mx + 1, fy, mx + mw - 1, my + mh - 1, 0x40000000);
+        g.fill(mx + 1, fy, mx + mw - 1, fy + 1, 0x30FFFFFF);
+        List<Modal.Action> actions = m.actions(v);
+        boolean closing = false;
+        for (Modal.Action a : actions) closing |= a.closes();
+        Component cancel = Component.translatable("nationsandwar.gui." + (closing ? "cancel" : "close"));
+        ui.button(g, mx + 6, fy + 5, Math.max(48, font.width(cancel) + 12), 14, cancel, Ui.Style.NORMAL, null, this::closeModal);
+        int bx = mx + mw - 6;
+        for (int i = actions.size() - 1; i >= 0; i--) {
+            Modal.Action a = actions.get(i);
+            int bw = Math.max(56, font.width(a.label()) + 14);
+            bx -= bw;
+            ui.button(g, bx, fy + 5, bw, 14, a.label(), a.style(), a.denied(), () -> runAction(a));
+            if (i == actions.size() - 1 && a.denied() == null) Draw.frame(g, bx - 1, fy + 4, bw + 2, 16, Draw.alpha(Draw.GOLD, 0x60));
+            bx -= 4;
+        }
+    }
+
+    private boolean insideModal(double x, double y) {
+        int mw = Math.min(modal.width(), width - 16), mh = Math.min(modal.height(), height - 16);
+        int mx = (width - mw) / 2, my = (height - mh) / 2;
+        return x >= mx && x < mx + mw + 4 && y >= my - 4 && y < my + mh;
     }
 
     // --- input -------------------------------------------------------------------------------------------------------------
 
     @Override
     public boolean mouseClicked(double mx, double my, int button) {
+        if (modal != null) {
+            if (super.mouseClicked(mx, my, button)) return true;
+            setFocused(null);
+            if (button == 0 && ui.click(mx, my)) return true;
+            if (!insideModal(mx, my)) closeModal();
+            return true;
+        }
         if (super.mouseClicked(mx, my, button)) return true;
         setFocused(null);
         if (button == 0 && ui.click(mx, my)) return true;
@@ -202,23 +349,39 @@ public class NationScreen extends Screen {
 
     @Override
     public boolean mouseDragged(double mx, double my, int button, double dx, double dy) {
+        if (modal != null) return super.mouseDragged(mx, my, button, dx, dy);
         return tab.mouseDragged(mx, my, button, dx, dy) || super.mouseDragged(mx, my, button, dx, dy);
     }
 
     @Override
     public boolean mouseReleased(double mx, double my, int button) {
+        if (modal != null) return super.mouseReleased(mx, my, button);
         return tab.mouseReleased(mx, my, button) || super.mouseReleased(mx, my, button);
     }
 
     @Override
     public boolean mouseScrolled(double mx, double my, double sx, double sy) {
+        if (modal != null) return ui.scroll(mx, my, sy) || true;
         return ui.scroll(mx, my, sy) || tab.mouseScrolled(mx, my, sy);
     }
 
     @Override
     public boolean keyPressed(int key, int scan, int mods) {
+        if (modal != null) {
+            if (key == GLFW.GLFW_KEY_ESCAPE) {
+                closeModal();
+                return true;
+            }
+            if (key == GLFW.GLFW_KEY_ENTER || key == GLFW.GLFW_KEY_KP_ENTER) {
+                PoliticsView v = ClientPolitics.view();
+                List<Modal.Action> actions = v == null ? List.of() : modal.actions(v);
+                if (!actions.isEmpty()) runAction(actions.getLast());
+                return true;
+            }
+        }
         if (!(getFocused() instanceof EditBox) && NWClient.OPEN_GUI.matches(key, scan)) {
-            onClose();
+            if (modal != null) closeModal();
+            else onClose();
             return true;
         }
         return super.keyPressed(key, scan, mods);
@@ -226,6 +389,7 @@ public class NationScreen extends Screen {
 
     @Override
     public void removed() {
+        if (modal != null) closeModal();
         ClientPolitics.unlisten(listener);
         ClientPolitics.closeView();
     }

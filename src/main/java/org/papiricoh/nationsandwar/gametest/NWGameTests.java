@@ -5,6 +5,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
@@ -159,6 +160,41 @@ public final class NWGameTests {
         h.succeed();
     }
 
+    @GameTest(template = FIELD, batch = "nw_atlas", timeoutTicks = 100)
+    public static void provinceColoursAndPublicTrees(GameTestHelper h) {
+        ServerPlayer mayor = fake(h, "Mayor10", new BlockPos(8, 2, 8)), stranger = fake(h, "Stranger10", new BlockPos(9, 2, 8));
+        Town t = town(h, mayor, "Gt Atlas", new BlockPos(8, 2, 8));
+        var server = h.getLevel().getServer();
+        Politics pol = NW.pol(server);
+        try {
+            h.assertTrue(pol.foundNation(mayor.getUUID(), "Gt Atlas Realm", GovernmentType.KINGDOM, 0).ok(), "nation");
+            Nation n = pol.nationOf(t);
+            n.bank = 10_000;
+            CompoundTag a = new CompoundTag();
+            a.putString("name", "Gt March");
+            h.assertTrue(Actions.run(mayor, "province.create", a).ok(), "province");
+            var province = pol.provinceOf(t);
+            CompoundTag c = new CompoundTag();
+            c.putString("province", province.id.toString());
+            c.putInt("color", 0x43A047);
+            h.assertTrue("no_perm".equals(Actions.run(stranger, "province.color", c).key()), "outsiders may not recolour");
+            h.assertTrue(Actions.run(mayor, "province.color", c).ok(), "recoloured");
+            var brief = org.papiricoh.nationsandwar.core.Sync.briefs(server).provinces().stream().filter(b -> b.id().equals(province.id)).findFirst().orElseThrow();
+            h.assertTrue(brief.color() == 0x43A047, "the brief carries the colour");
+            var mine = org.papiricoh.nationsandwar.core.ViewBuilder.tree(mayor, "nation", n.id);
+            var theirs = org.papiricoh.nationsandwar.core.ViewBuilder.tree(stranger, "nation", n.id);
+            h.assertTrue(mine.mine() && !mine.permsHidden() && mine.roles().stream().anyMatch(r -> r.perms() != 0), "my tree shows perms");
+            h.assertTrue(!theirs.mine() && theirs.permsHidden() && theirs.roles().stream().allMatch(r -> r.perms() == 0), "others' hides them");
+            h.assertTrue(theirs.roles().size() == mine.roles().size() && theirs.members().stream().anyMatch(m -> m.id().equals(mayor.getUUID())),
+                    "but shows ranks and holders");
+            h.assertTrue(theirs.provinces().size() == 1 && theirs.provinces().getFirst().picked(), "and provinces");
+            h.assertTrue(!org.papiricoh.nationsandwar.core.ViewBuilder.tree(stranger, "town", UUID.randomUUID()).exists(), "unknown ids answer empty");
+        } finally {
+            cleanup(h, t);
+        }
+        h.succeed();
+    }
+
     @GameTest(template = FIELD, batch = "nw_explosions", timeoutTicks = 100)
     public static void explosionsFollowTheFlag(GameTestHelper h) {
         ServerPlayer mayor = fake(h, "Mayor3", new BlockPos(8, 2, 8));
@@ -290,6 +326,129 @@ public final class NWGameTests {
             cleanup(h, t);
         }
         h.succeed();
+    }
+
+    @GameTest(template = FIELD, batch = "nw_npc_court", timeoutTicks = 100)
+    public static void npcCourtsFillEveryRank(GameTestHelper h) {
+        purge(h);
+        BlockPos at = h.absolutePos(new BlockPos(24, 2, 24));
+        Town t = NpcService.create(h.getLevel(), at, "Gt Courtmere");
+        h.assertTrue(t != null && t.npc, "adopted");
+        net.minecraft.server.MinecraftServer server = h.getLevel().getServer();
+        Politics pol = NW.pol(server);
+        try {
+            Nation n = pol.nations.get(t.nation);
+            h.assertTrue(n != null && n.npc, "in an NPC nation");
+            java.util.Random r = new java.util.Random(42);
+            org.papiricoh.nationsandwar.npc.NpcCourt.staff(pol, n, r, h.getLevel().getGameTime());
+            org.papiricoh.nationsandwar.npc.NpcCourt.staff(pol, t, r, h.getLevel().getGameTime());
+            for (org.papiricoh.nationsandwar.model.RoleTree tree : List.of(n.roles, t.roles)) {
+                for (org.papiricoh.nationsandwar.model.Role role : tree.all()) {
+                    if (role.kind == org.papiricoh.nationsandwar.model.Role.Kind.GOVERNOR) continue;
+                    h.assertTrue(!role.holders.isEmpty(), "a holder for " + role.name);
+                    for (UUID id : role.holders) {
+                        var persona = pol.persona(id);
+                        h.assertTrue(persona != null, "a character holds " + role.name);
+                        h.assertTrue(persona.name().equals(NW.name(server, id)), "NW.name resolves " + persona.name());
+                    }
+                }
+            }
+            h.assertTrue(NW.name(server, n.leader()).contains(" "), "the leader has a full name");
+            AABB box = new AABB(BlockPos.of(t.core)).inflate(16);
+            h.getLevel().getEntitiesOfClass(GuardEntity.class, box).forEach(e -> e.discard());
+            h.getLevel().getEntitiesOfClass(EnvoyEntity.class, box).forEach(e -> e.discard());
+        } finally {
+            Actions.removeCore(server, t);
+            cleanup(h, t);
+        }
+        h.succeed();
+    }
+
+    @GameTest(template = FIELD, batch = "nw_liberation", timeoutTicks = 200)
+    public static void ownersFreeTheirOccupiedLand(GameTestHelper h) {
+        Front f = front(h, "L");
+        int minDef = NWConfig.get(NWConfig.MIN_DEFENDERS_ONLINE), points = NWConfig.get(NWConfig.CHUNK_POINTS);
+        NWConfig.MIN_DEFENDERS_ONLINE.set(0);
+        Runnable restore = () -> NWConfig.MIN_DEFENDERS_ONLINE.set(minDef);
+        ServerLevel level = h.getLevel();
+        f.war.occupied.computeIfAbsent(f.d.id, k -> new java.util.LinkedHashSet<>()).add(f.d.homeChunk);
+        f.war.coreOpen.add(f.d.id);
+        f.war.coreDamage.put(f.d.id, 1);
+        f.war.scoreAttackers = points;
+        BlockPos banner = sameChunk(h, new BlockPos(8, 2, 8), 3, 3);
+        level.setBlockAndUpdate(banner, NWRegistry.SIEGE_BANNER.get().defaultBlockState());
+        Result enemy = WarService.plantBanner(level, banner, f.na.id, false);
+        Result mine = WarService.plantBanner(level, banner, f.nd.id, false);
+        if (!"siege.occupied".equals(enemy.key()) || !mine.ok()) {
+            restore.run();
+            cleanup(h, f.a, f.d);
+            h.fail("enemy: " + enemy.key() + ", owner: " + mine.key());
+            return;
+        }
+        h.assertTrue(f.war.sieges.getFirst().liberation, "a liberation");
+        f.war.sieges.getFirst().control = 0.99f;
+        GuardEntity g = NpcService.spawnGuard(level, null, f.nd, banner, 4, true);
+        g.setNoAi(true);
+        g.moveTo(banner.getX() + 0.5, banner.getY(), banner.getZ() + 1.5);
+        h.succeedWhen(() -> {
+            h.assertFalse(f.war.isOccupied(f.d.id, f.d.homeChunk), "the home chunk is free again");
+            h.assertFalse(f.war.coreOpen.contains(f.d.id), "the core is closed");
+            h.assertFalse(f.war.coreDamage.containsKey(f.d.id), "its damage forgotten");
+            h.assertTrue(f.war.scoreAttackers == 0, "the occupiers lost the chunk's points: " + f.war.scoreAttackers);
+            if (g.isAlive()) g.discard();
+            restore.run();
+            cleanup(h, f.a, f.d);
+        });
+    }
+
+    @GameTest(template = FIELD, batch = "nw_npc_campaign", timeoutTicks = 400)
+    public static void npcCampaignsRunUnwatchedTowardTheCore(GameTestHelper h) {
+        purge(h);
+        ServerLevel level = h.getLevel();
+        MinecraftServer server = level.getServer();
+        double rate = NWConfig.get(NWConfig.CONTROL_RATE);
+        NWConfig.CONTROL_RATE.set(0.5);
+        BlockPos far = h.absolutePos(new BlockPos(8, 2, 8)).offset(16 * 400, 0, 0);
+        Town ta = NpcService.create(level, far, "Gt Ashmark");
+        Town tb = NpcService.create(level, far.offset(16 * 40, 0, 0), "Gt Birchvale");
+        Runnable done = () -> {
+            NWConfig.CONTROL_RATE.set(rate);
+            for (Town t : new Town[]{ta, tb}) if (t != null) Actions.removeCore(server, t);
+            cleanup(h, ta, tb);
+        };
+        if (ta == null || tb == null || ta.nation == null || tb.nation == null || ta.nation.equals(tb.nation)) {
+            done.run();
+            h.fail("two NPC nations far from players");
+            return;
+        }
+        Politics pol = NW.pol(server);
+        Nation na = pol.nations.get(ta.nation), nb = pol.nations.get(tb.nation);
+        WarService.declare(server, na, nb, false);
+        War w = NW.data(server).wars.values().stream().filter(x -> x.enemies(na.id, nb.id)).findFirst().orElseThrow();
+        w.phase = War.Phase.ACTIVE;
+        w.deadline = Long.MAX_VALUE;
+        NpcService.planWars(server);
+        var first = w.sieges.stream().filter(s -> s.byAttackers && s.town.equals(tb.id)).findFirst().orElse(null);
+        if (first == null || first.placed || first.lastA <= 0) {
+            done.run();
+            h.fail("an unwatched siege on " + tb.name + ": " + first);
+            return;
+        }
+        first.lastD = 0;
+        long firstChunk = first.chunk;
+        h.succeedWhen(() -> {
+            h.assertTrue(w.isOccupied(tb.id, firstChunk), "the simulated siege took its chunk (control " + first.control + ")");
+            NpcService.planWars(server);
+            var next = w.sieges.stream().filter(s -> s.byAttackers && s.town.equals(tb.id)).findFirst().orElse(null);
+            h.assertTrue(next != null, "the campaign goes on");
+            h.assertTrue(chebyshev(next.chunk, tb.homeChunk) < chebyshev(firstChunk, tb.homeChunk), "a step closer to the core");
+            done.run();
+        });
+    }
+
+    private static int chebyshev(long a, long b) {
+        return Math.max(Math.abs(net.minecraft.world.level.ChunkPos.getX(a) - net.minecraft.world.level.ChunkPos.getX(b)),
+                Math.abs(net.minecraft.world.level.ChunkPos.getZ(a) - net.minecraft.world.level.ChunkPos.getZ(b)));
     }
 
     // --- the API (v0.2) ----------------------------------------------------------------------------------------------------

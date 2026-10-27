@@ -187,4 +187,25 @@ class PoliticsTest {
         assertEquals(TownLevel.METROPOLIS, TownLevel.of(40));
         assertEquals(16, TownLevel.maxChunks(1, 1.0));
     }
+
+    @Test
+    void provinceColourIsAShadeOfTheNationUntilPicked() {
+        Politics p = new Politics();
+        Town a = found(p, mayor, "Alderford", 0, 0);
+        p.foundNation(mayor, "Valoria", GovernmentType.REPUBLIC, 0);
+        Nation n = p.nationOf(a);
+        n.bank = 1000;
+        a.invites.add(eve);
+        p.join(eve, a);
+        assertTrue(p.createProvince(mayor, n, "North March", a).ok());
+        Province pr = p.provinceOf(a);
+        int shade = p.provinceColor(pr);
+        assertNotEquals(n.color, shade, "a shade, not the nation's colour itself");
+        n.color = 0x1E88E5;
+        assertNotEquals(shade, p.provinceColor(pr), "follows the nation's colour");
+        assertEquals("no_perm", p.setProvinceColor(eve, pr, 0x43A047).key());
+        assertTrue(p.setProvinceColor(mayor, pr, 0xFF43A047).ok());
+        assertEquals(0x43A047, p.provinceColor(pr));
+        assertEquals(0x43A047, Province.load(pr.save()).color, "saved");
+    }
 }

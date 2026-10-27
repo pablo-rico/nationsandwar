@@ -1,33 +1,28 @@
 package org.papiricoh.nationsandwar.client.screen.tab;
 
 import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.client.gui.components.EditBox;
-import net.minecraft.nbt.ListTag;
-import net.minecraft.nbt.StringTag;
 import net.minecraft.network.chat.Component;
 import org.papiricoh.nationsandwar.client.ClientClaims;
 import org.papiricoh.nationsandwar.client.gui.Draw;
 import org.papiricoh.nationsandwar.client.gui.Ui;
 import org.papiricoh.nationsandwar.client.screen.NationScreen;
+import org.papiricoh.nationsandwar.client.screen.modal.ConfirmModal;
+import org.papiricoh.nationsandwar.client.screen.modal.TreatyModal;
 import org.papiricoh.nationsandwar.model.Perm;
-import org.papiricoh.nationsandwar.view.Briefs;
 import org.papiricoh.nationsandwar.view.PoliticsView;
 import org.papiricoh.nationsandwar.view.SiegeBrief;
 
-import java.util.LinkedHashSet;
-import java.util.Set;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 /**
  * The wars my nation is in: the two sides, each side's score against the target, the phase with its countdown, the
- * sieges with their control bars and the fallen towns; white peace and surrender. During the treaty window the winner
- * edits the terms (annex fallen towns, tribute, vassal days) and may sign at once.
+ * sieges with their control bars and the fallen towns. The action bar offers or accepts white peace and surrenders (both
+ * after asking); during the treaty window it opens the winner's terms editor and signs at once.
  */
 public final class WarTab extends Tab {
-    private EditBox tribute, vassal;
-    private UUID selected, draftWar;
-    private final Set<UUID> annex = new LinkedHashSet<>();
-    private boolean confirmSurrender;
+    private UUID selected;
 
     public WarTab(NationScreen screen) {
         super(screen);
@@ -46,12 +41,6 @@ public final class WarTab extends Tab {
     @Override
     public Component unavailable(PoliticsView v) {
         return v.wars().isEmpty() ? tr("at_peace") : null;
-    }
-
-    @Override
-    public void init() {
-        tribute = field("tribute", 7, tr("tribute"), true);
-        vassal = field("vassal", 4, tr("vassal_days"), true);
     }
 
     public static int phaseColor(String phase) {
@@ -93,10 +82,10 @@ public final class WarTab extends Tab {
         ty = scores(g, v, war, ty + 4);
         PoliticsView.NationView mine = v.nation();
         UUID winner = "ATTACKERS".equals(war.outcome()) ? war.attacker() : "DEFENDERS".equals(war.outcome()) ? war.defender() : null;
-        int bottom = y + h - 16;
-        if ("TREATY".equals(war.phase())) treaty(g, v, war, mine, winner, ty + 4, bottom);
+        int bottom = y + h - BAR - 2;
+        if ("TREATY".equals(war.phase())) treaty(g, v, war, winner, ty + 4, bottom);
         else details(g, v, war, ty + 4, bottom - 4);
-        actions(g, v, war, mine, bottom);
+        actionBar(g, acts(v, war, mine, winner));
     }
 
     private int banner(GuiGraphics g, PoliticsView v, PoliticsView.WarView war, int by) {
@@ -208,70 +197,49 @@ public final class WarTab extends Tab {
         g.fill(at - 1, cy - 1, at + 1, cy + 7, Draw.GOLD);
     }
 
-    private void treaty(GuiGraphics g, PoliticsView v, PoliticsView.WarView war, PoliticsView.NationView mine, UUID winner, int ty, int bottom) {
-        if (!war.id().equals(draftWar)) {
-            draftWar = war.id();
-            annex.clear();
-            annex.addAll(war.annex());
-            tribute.setValue(war.tribute() > 0 ? String.valueOf(war.tribute()) : "");
-            vassal.setValue(war.vassalDays() > 0 ? String.valueOf(war.vassalDays()) : "");
-        }
-        boolean editor = mine != null && mine.id().equals(winner);
-        Component denied = !editor ? tr("winner_only") : need(mine.myPerms(), Perm.SIGN_TREATY);
+    /** The treaty window: who won, the countdown and the terms set so far. */
+    private void treaty(GuiGraphics g, PoliticsView v, PoliticsView.WarView war, UUID winner, int ty, int bottom) {
         Component outcome = winner == null ? tr("outcome.white_peace") : tr("outcome.won", nationName(v, winner));
         heading(g, tr("treaty").append(" — ").append(outcome), x + 2, ty, w - 4);
         int cw = (w - 10) / 2, cx = x + 2, ry = ty + 14;
         g.drawString(font, tr("annex"), cx, ry, Draw.MUTED, false);
         ry += 12;
         for (UUID t : war.fallen()) {
-            Briefs.TownBrief tb = ClientClaims.town(t);
-            Briefs.NationBrief owner = tb == null ? null : ClientClaims.nation(tb.nation());
-            boolean capital = owner != null && t.equals(owner.capital());
-            boolean on = annex.contains(t);
-            ui.check(g, cx, ry, Component.literal(townName(v, t)), on, denied != null ? denied : capital ? tr("no_annex_capital") : null, () -> {
-                if (!annex.remove(t)) annex.add(t);
-            });
-            ry += 13;
+            if (ry > bottom - 10) break;
+            boolean on = war.annex().contains(t);
+            g.drawString(font, Component.literal((on ? "⚑ " : "· ") + townName(v, t)), cx + 4, ry, on ? Draw.GOLD : Draw.MUTED, false);
+            ry += 11;
         }
-        if (war.fallen().isEmpty()) g.drawString(font, tr("none"), cx, ry, Draw.MUTED, false);
+        if (war.fallen().isEmpty()) g.drawString(font, tr("none"), cx + 4, ry, Draw.MUTED, false);
         int fx = cx + cw + 6, fy = ty + 14;
-        g.drawString(font, tr("tribute"), fx, fy + 3, Draw.MUTED, false);
-        place(tribute, fx + cw - 70, fy, 70);
-        fy += 16;
-        g.drawString(font, tr("vassal_days_max", v.prices().maxVassalDays()), fx, fy + 3, Draw.MUTED, false);
-        place(vassal, fx + cw - 70, fy, 70);
-        tribute.setEditable(denied == null);
-        vassal.setEditable(denied == null);
-        fy += 20;
-        int bw = (cw - 4) / 2;
-        ui.button(g, fx, fy, bw, 13, tr("set_terms"), Ui.Style.GOLD, denied, () -> {
-            ListTag list = new ListTag();
-            for (UUID t : annex) list.add(StringTag.valueOf(t.toString()));
-            act("war.terms", "annex", list, "tribute", number(tribute), "vassal", number(vassal));
-        });
-        ui.button(g, fx + bw + 4, fy, cw - bw - 4, 13, tr("sign_now"), Ui.Style.GOOD, denied, () -> act("war.confirm"));
-        fy += 18;
-        Component current = tr("current_terms", war.annex().size(), war.tribute(), war.vassalDays());
-        g.drawWordWrap(font, current, fx, fy, cw, Draw.MUTED);
+        fy = stat(g, tr("tribute"), money(war.tribute()), fx, fy, cw, Draw.GOLD);
+        fy = stat(g, tr("vassal_days_max", v.prices().maxVassalDays()), Component.literal(String.valueOf(war.vassalDays())), fx, fy, cw, Draw.TEXT);
+        fy = stat(g, tr("annexed_towns"), Component.literal(String.valueOf(war.annex().size())), fx, fy, cw, Draw.TEXT);
+        g.drawWordWrap(font, tr("treaty_hint"), fx, fy + 6, cw, 0xFF6A7384);
     }
 
-    private void actions(GuiGraphics g, PoliticsView v, PoliticsView.WarView war, PoliticsView.NationView mine, int ay) {
-        if (mine == null || !"PREPARATION".equals(war.phase()) && !"ACTIVE".equals(war.phase())) return;
+    private List<Act> acts(PoliticsView v, PoliticsView.WarView war, PoliticsView.NationView mine, UUID winner) {
+        List<Act> acts = new ArrayList<>();
+        if (mine == null) return acts;
+        if ("TREATY".equals(war.phase())) {
+            boolean editor = mine.id().equals(winner);
+            Component denied = !editor ? tr("winner_only") : need(mine.myPerms(), Perm.SIGN_TREATY);
+            acts.add(Act.modal(tr("edit_terms"), Ui.Style.GOLD, denied, () -> new TreatyModal(war)));
+            acts.add(Act.modal(tr("sign_now"), Ui.Style.GOOD, denied, () -> new ConfirmModal(tr("sign_now"),
+                    tr("confirm_sign", war.annex().size(), war.tribute(), war.vassalDays()), tr("sign_now"), () -> act("war.confirm"))));
+            return acts;
+        }
+        if (!"PREPARATION".equals(war.phase()) && !"ACTIVE".equals(war.phase())) return acts;
         boolean attacker = war.attacker().equals(mine.id()), lead = attacker || war.defender().equals(mine.id());
         Component denied = !lead ? tr("war_leader_only") : need(mine.myPerms(), Perm.SIGN_TREATY);
         String mySide = attacker ? "attackers" : "defenders";
         boolean theyOffered = !war.peaceBy().isEmpty() && !war.peaceBy().equals(mySide), weOffered = war.peaceBy().equals(mySide);
-        int bw = (w - 10) / 2;
+        String foe = nationName(v, attacker ? war.defender() : war.attacker());
         Component peace = tr(theyOffered ? "accept_peace" : weOffered ? "peace_offered" : "offer_peace");
-        ui.button(g, x + 2, ay, bw, 13, peace, Ui.Style.GOOD, weOffered ? tr("peace_offered") : denied, () -> act("war.peace", "war", war.id()));
-        ui.button(g, x + w - 2 - bw, ay, bw, 13, confirmSurrender ? tr("sure") : tr("surrender"), Ui.Style.BAD, denied, () -> {
-            if (confirmSurrender) act("war.surrender", "war", war.id());
-            confirmSurrender = !confirmSurrender;
-        });
-    }
-
-    @Override
-    public void viewChanged(PoliticsView v) {
-        for (PoliticsView.WarView wv : v.wars()) if (wv.id().equals(draftWar) && !"TREATY".equals(wv.phase())) draftWar = null;
+        acts.add(Act.modal(peace, Ui.Style.GOOD, weOffered ? tr("peace_offered") : denied, () -> new ConfirmModal(peace,
+                tr(theyOffered ? "confirm_accept_peace" : "confirm_offer_peace", foe), peace, () -> act("war.peace", "war", war.id()))));
+        acts.add(Act.modal(tr("surrender"), Ui.Style.BAD, denied, () -> new ConfirmModal(tr("surrender"),
+                tr("confirm_surrender", foe), tr("surrender"), () -> act("war.surrender", "war", war.id()))));
+        return acts;
     }
 }

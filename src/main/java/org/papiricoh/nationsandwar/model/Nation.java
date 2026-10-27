@@ -1,8 +1,11 @@
 package org.papiricoh.nationsandwar.model;
 
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.Tag;
 
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
@@ -41,6 +44,8 @@ public final class Nation {
     public String titles;
     /** Data other mods keep on the nation, one key per mod ("supernaturalcraft:guild"). Saved, never read by this mod. */
     public CompoundTag ext = new CompoundTag();
+    /** NPC nations: the characters who hold its roles ({@link Persona}), by id. Empty for every other nation. */
+    public final Map<UUID, Persona> court = new LinkedHashMap<>();
 
     public Nation(UUID id, String name, GovernmentType government) {
         this.id = id;
@@ -97,6 +102,11 @@ public final class Nation {
         if (managedBy != null) t.putString("managedBy", managedBy);
         if (titles != null) t.putString("titles", titles);
         if (!ext.isEmpty()) t.put("ext", ext.copy());
+        if (!court.isEmpty()) {
+            ListTag c = new ListTag();
+            for (Persona p : court.values()) c.add(p.save());
+            t.put("court", c);
+        }
         return t;
     }
 
@@ -124,6 +134,10 @@ public final class Nation {
         if (t.contains("managedBy")) n.managedBy = t.getString("managedBy");
         if (t.contains("titles")) n.titles = t.getString("titles");
         if (t.contains("ext")) n.ext = t.getCompound("ext").copy();
+        for (Tag e : t.getList("court", Tag.TAG_COMPOUND)) {
+            Persona p = Persona.load((CompoundTag) e);
+            n.court.put(p.id(), p);
+        }
         return n;
     }
 }

@@ -50,6 +50,14 @@ public final class WorldMapClaims extends ChunkHighlighter {
         if (c != null) list.add(c);
     }
 
+    /** The dimension the World Map shows (null before it has one). */
+    static String viewedDimension() {
+        WorldMapSession session = WorldMapSession.getCurrentSession();
+        if (session == null || session.getMapProcessor() == null || session.getMapProcessor().getMapWorld() == null) return null;
+        var id = session.getMapProcessor().getMapWorld().getCurrentDimensionId();
+        return id == null ? null : id.location().toString();
+    }
+
     static void invalidate() {
         WorldMapSession session = WorldMapSession.getCurrentSession();
         if (session != null && session.getMapProcessor() != null && session.getMapProcessor().getMapWorld() != null)

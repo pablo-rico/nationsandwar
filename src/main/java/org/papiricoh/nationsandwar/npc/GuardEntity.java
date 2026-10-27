@@ -5,7 +5,9 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.DifficultyInstance;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.EntityType;
@@ -18,6 +20,7 @@ import net.minecraft.world.entity.SpawnGroupData;
 import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.ai.goal.FloatGoal;
+import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.entity.ai.goal.LookAtPlayerGoal;
 import net.minecraft.world.entity.ai.goal.MeleeAttackGoal;
 import net.minecraft.world.entity.ai.goal.MoveTowardsRestrictionGoal;
@@ -38,6 +41,7 @@ import org.papiricoh.nationsandwar.model.Nation;
 import org.papiricoh.nationsandwar.model.Town;
 import org.papiricoh.nationsandwar.war.WarService;
 
+import java.util.EnumSet;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -54,7 +58,15 @@ public class GuardEntity extends PathfinderMob {
     private UUID town;
     /** A war party's soldier (or a siege's reinforcement): gone once its war is over. */
     public boolean soldier;
+    /** A soldier left to hold a chunk its side took (never sent on to the next banner while the chunk stays taken). */
+    public boolean garrison;
     private BlockPos post;
+    /** Where a guard rallied to a siege goes back to once the banner is gone (null: not rallied). */
+    private BlockPos home;
+    private int homeRadius;
+    /** Checks in a row (every 5 s) far from the post without getting closer: at 12 it is put back at its post. */
+    private int stuck;
+    private double lastDistance = Double.MAX_VALUE;
 
     public GuardEntity(EntityType<? extends GuardEntity> type, Level level) {
         super(type, level);
@@ -78,6 +90,7 @@ public class GuardEntity extends PathfinderMob {
     protected void registerGoals() {
         goalSelector.addGoal(0, new FloatGoal(this));
         goalSelector.addGoal(1, new MeleeAttackGoal(this, 1.1, true));
+        goalSelector.addGoal(2, new BreakCoreGoal());
         goalSelector.addGoal(2, new OpenDoorGoal(this, true));
         goalSelector.addGoal(3, new MoveTowardsRestrictionGoal(this, 0.9));
         goalSelector.addGoal(5, new WaterAvoidingRandomStrollGoal(this, 0.6));
@@ -122,6 +135,31 @@ public class GuardEntity extends PathfinderMob {
         for (EquipmentSlot s : EquipmentSlot.values()) setDropChance(s, 0);
     }
 
+    public BlockPos post() {
+        return post;
+    }
+
+    /** Sends the guard to a new post (the next banner, a taken chunk). */
+    public void repost(BlockPos post, int radius) {
+        this.post = post;
+        stuck = 0;
+        lastDistance = Double.MAX_VALUE;
+        restrictTo(post, radius);
+    }
+
+    /** Rallies a town guard to a siege: it goes back to its post once the banner is gone. */
+    public void rally(BlockPos banner, int radius) {
+        if (home == null && post != null) {
+            home = post;
+            homeRadius = (int) getRestrictRadius();
+        }
+        repost(banner, radius);
+    }
+
+    public boolean rallied() {
+        return home != null;
+    }
+
     public UUID nation() {
         return entityData.get(NATION).orElse(null);
     }
@@ -149,12 +187,110 @@ public class GuardEntity extends PathfinderMob {
             return;
         }
         if (n.color != color()) entityData.set(COLOR, n.color);
+        if (home != null && !WarService.bannerActive(level().getServer(), NW.dim(level()), post)) {
+            repost(home, Math.max(4, homeRadius));
+            home = null;
+        }
+        unstick();
+    }
+
+    /** A guard that cannot find its way to a far post for a minute is put back at it. */
+    private void unstick() {
+        if (post == null || getTarget() != null) return;
+        double d = distanceToSqr(post.getX() + 0.5, post.getY(), post.getZ() + 0.5);
+        double far = getRestrictRadius() + 6;
+        if (d <= far * far) {
+            stuck = 0;
+            lastDistance = d;
+            return;
+        }
+        stuck = d < lastDistance - 4 ? 0 : stuck + 1;
+        lastDistance = Math.min(lastDistance, d);
+        if (stuck >= 12) {
+            BlockPos at = level().getHeightmapPos(net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, post);
+            moveTo(at.getX() + 0.5, at.getY(), at.getZ() + 0.5, getYRot(), 0);
+            getNavigation().stop();
+            stuck = 0;
+            lastDistance = Double.MAX_VALUE;
+        }
+    }
+
+    /** The open Core of an enemy town within 32 blocks, while this soldier's nation is at war with it. */
+    private BlockPos enemyCore() {
+        if (level().isClientSide || nation() == null || !soldier) return null;
+        NWSavedData data = NW.data(level().getServer());
+        for (org.papiricoh.nationsandwar.war.War w : data.wars.values()) {
+            if (w.phase != org.papiricoh.nationsandwar.war.War.Phase.ACTIVE || !w.involves(nation())) continue;
+            for (UUID id : w.coreOpen) {
+                Town t = data.politics.towns.get(id);
+                if (t == null || w.fallen.contains(id) || !w.enemies(nation(), t.nation) || !t.dimension.equals(NW.dim(level()))) continue;
+                BlockPos c = BlockPos.of(t.core);
+                if (distanceToSqr(c.getX() + 0.5, c.getY(), c.getZ() + 0.5) <= 32 * 32) return c;
+            }
+        }
+        return null;
+    }
+
+    /** Soldiers walk to an open enemy Core and strike it every two seconds (each strike counts as a player's). */
+    private final class BreakCoreGoal extends Goal {
+        private BlockPos core;
+        private int cooldown;
+
+        BreakCoreGoal() {
+            setFlags(EnumSet.of(Goal.Flag.MOVE, Goal.Flag.LOOK));
+        }
+
+        @Override
+        public boolean canUse() {
+            if (!soldier || tickCount % 20 != 0) return false;
+            core = enemyCore();
+            return core != null;
+        }
+
+        @Override
+        public boolean canContinueToUse() {
+            if (core == null) return false;
+            if (tickCount % 20 == 0) core = enemyCore();
+            return core != null;
+        }
+
+        @Override
+        public void start() {
+            cooldown = 20;
+        }
+
+        @Override
+        public void stop() {
+            core = null;
+            getNavigation().stop();
+        }
+
+        @Override
+        public boolean requiresUpdateEveryTick() {
+            return true;
+        }
+
+        @Override
+        public void tick() {
+            getLookControl().setLookAt(core.getX() + 0.5, core.getY() + 0.5, core.getZ() + 0.5);
+            if (distanceToSqr(core.getX() + 0.5, core.getY(), core.getZ() + 0.5) > 2.5 * 2.5) {
+                if (getNavigation().isDone() || tickCount % 20 == 0) getNavigation().moveTo(core.getX() + 0.5, core.getY(), core.getZ() + 0.5, 1.0);
+                return;
+            }
+            getNavigation().stop();
+            if (--cooldown > 0) return;
+            cooldown = 40;
+            swing(InteractionHand.MAIN_HAND);
+            WarService.hitCore((ServerLevel) level(), core, nation());
+        }
     }
 
     @Override
     public void die(DamageSource source) {
         super.die(source);
-        if (!level().isClientSide && source.getEntity() instanceof ServerPlayer killer) NpcService.guardKilled(killer, this);
+        if (level().isClientSide) return;
+        if (nation() != null) WarService.fighterLost(level().getServer(), nation());
+        if (source.getEntity() instanceof ServerPlayer killer) NpcService.guardKilled(killer, this);
     }
 
     @Override
@@ -177,6 +313,11 @@ public class GuardEntity extends PathfinderMob {
         tag.putInt("Color", color());
         tag.putInt("Skin", skin());
         tag.putBoolean("Soldier", soldier);
+        tag.putBoolean("Garrison", garrison);
+        if (home != null) {
+            tag.putLong("Home", home.asLong());
+            tag.putInt("HomeRadius", homeRadius);
+        }
         if (post != null) {
             tag.putLong("Post", post.asLong());
             tag.putInt("PostRadius", (int) getRestrictRadius());
@@ -191,6 +332,9 @@ public class GuardEntity extends PathfinderMob {
         entityData.set(COLOR, tag.getInt("Color"));
         entityData.set(SKIN, tag.getInt("Skin"));
         soldier = tag.getBoolean("Soldier");
+        garrison = tag.getBoolean("Garrison");
+        home = tag.contains("Home") ? BlockPos.of(tag.getLong("Home")) : null;
+        homeRadius = tag.getInt("HomeRadius");
         if (tag.contains("Post")) {
             post = BlockPos.of(tag.getLong("Post"));
             restrictTo(post, Math.max(4, tag.getInt("PostRadius")));

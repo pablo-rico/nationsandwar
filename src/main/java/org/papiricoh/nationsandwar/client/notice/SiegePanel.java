@@ -73,7 +73,8 @@ final class SiegePanel {
         int pct = Math.round((s.control() + 1) * 50);
         Component pctText = Component.literal(pct + "%");
         int pw = font.width(pctText), tx = 25, bw = W - tx - 6;
-        Component title = Component.translatable("nationsandwar.notice.siege_of", town != null ? town.name() : s.defender());
+        Component title = Component.translatable(s.liberation() ? "nationsandwar.notice.liberation_of" : "nationsandwar.notice.siege_of",
+                town != null ? town.name() : s.defender());
         g.drawString(font, Draw.fit(font, title, bw - pw - 4), tx, 5, NoticeHud.fade(Draw.TEXT, a), false);
         g.drawString(font, pctText, W - 6 - pw, 5, NoticeHud.fade(Draw.mix(s.control() > 0 ? besieger : defender, 0xFFFFFFFF, 0.3f), a), false);
         int by = 16, mid = tx + bw / 2, at = mid + Math.round((bw / 2f - 1) * Math.clamp(s.control(), -1, 1));

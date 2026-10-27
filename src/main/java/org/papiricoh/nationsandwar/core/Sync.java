@@ -17,6 +17,7 @@ import org.papiricoh.nationsandwar.model.Town;
 import org.papiricoh.nationsandwar.network.BriefsPayload;
 import org.papiricoh.nationsandwar.network.ClaimsPayload;
 import org.papiricoh.nationsandwar.network.RateLimiter;
+import org.papiricoh.nationsandwar.network.TreePayload;
 import org.papiricoh.nationsandwar.network.ViewPayload;
 import org.papiricoh.nationsandwar.view.Briefs;
 import org.papiricoh.nationsandwar.war.War;
@@ -131,6 +132,11 @@ public final class Sync {
         PacketDistributor.sendToPlayer(p, new ViewPayload(ViewBuilder.build(p).write()));
     }
 
+    /** Answers {@code inspect}: the rank tree of a town or nation ({@link ViewBuilder#tree}). */
+    public static void sendTree(ServerPlayer p, String scope, UUID id) {
+        PacketDistributor.sendToPlayer(p, new TreePayload(ViewBuilder.tree(p, scope, id).write()));
+    }
+
     private static void snapshot(Politics pol) {
         SENT.clear();
         for (Town t : pol.towns.values()) {
@@ -161,7 +167,7 @@ public final class Sync {
                     t.managedBy == null ? "" : t.managedBy));
         }
         List<Briefs.ProvinceBrief> provinces = new ArrayList<>();
-        pol.provinces.values().forEach(p -> provinces.add(new Briefs.ProvinceBrief(p.id, p.name, p.nation)));
+        pol.provinces.values().forEach(p -> provinces.add(new Briefs.ProvinceBrief(p.id, p.name, p.nation, pol.provinceColor(p))));
         List<Briefs.NationBrief> nations = new ArrayList<>();
         for (Nation n : pol.nations.values()) {
             nations.add(new Briefs.NationBrief(n.id, n.name, n.color, n.government.id(), n.alliance, n.capital, n.npc, NW.name(server, n.leader()),

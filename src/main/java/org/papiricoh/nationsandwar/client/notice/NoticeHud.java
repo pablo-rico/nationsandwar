@@ -269,7 +269,7 @@ public final class NoticeHud {
         lastFrame = now;
         update(now);
         if (mc.options.hideGui || mc.getDebugOverlay().showDebugScreen() || mc.player == null) return;
-        float scale = (float) NWClientConfig.get(NWClientConfig.NOTICE_SCALE), ease = 1 - (float) Math.exp(-dt / 70f);
+        float scale = (float) NWClientConfig.get(NWClientConfig.NOTICE_SIZE), ease = 1 - (float) Math.exp(-dt / 70f);
         boolean centre = NWClientConfig.get(NWClientConfig.NOTICE_TOP_CENTER);
         // Centred cards still drop below the toasts when they are wide enough to reach the toasts' column (160 wide).
         boolean underToasts = !centre || (g.guiWidth() / scale + Math.max(stackWidth, SiegePanel.W)) / 2 > (g.guiWidth() - 160) / scale - 4;

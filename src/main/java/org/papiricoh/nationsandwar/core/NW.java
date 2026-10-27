@@ -8,6 +8,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import org.papiricoh.nationsandwar.data.NWSavedData;
+import org.papiricoh.nationsandwar.model.Persona;
 import org.papiricoh.nationsandwar.model.Politics;
 import org.papiricoh.nationsandwar.model.Result;
 import org.papiricoh.nationsandwar.model.Town;
@@ -45,9 +46,11 @@ public final class NW {
         return pol(level.getServer()).townAt(dim(level), chunk(pos));
     }
 
-    /** A player's name from the profile cache (offline players too), or a short id. */
+    /** A court character's name, else a player's from the profile cache (offline players too), or a short id. */
     public static String name(MinecraftServer server, UUID id) {
         if (id == null) return "";
+        Persona persona = pol(server).persona(id);
+        if (persona != null) return persona.name();
         ServerPlayer online = server.getPlayerList().getPlayer(id);
         if (online != null) return online.getGameProfile().getName();
         var cache = server.getProfileCache();

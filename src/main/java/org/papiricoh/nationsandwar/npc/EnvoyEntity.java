@@ -2,6 +2,7 @@ package org.papiricoh.nationsandwar.npc;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.network.chat.Component;
 import net.minecraft.network.syncher.EntityDataAccessor;
 import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.network.syncher.SynchedEntityData;
@@ -24,6 +25,8 @@ import net.neoforged.neoforge.network.PacketDistributor;
 import org.papiricoh.nationsandwar.core.NW;
 import org.papiricoh.nationsandwar.core.Sync;
 import org.papiricoh.nationsandwar.model.Nation;
+import org.papiricoh.nationsandwar.model.Persona;
+import org.papiricoh.nationsandwar.model.Role;
 import org.papiricoh.nationsandwar.network.OpenScreenPayload;
 
 import java.util.Optional;
@@ -31,6 +34,7 @@ import java.util.UUID;
 
 /**
  * An NPC nation's envoy, at its capital: cannot be hurt; talking to it opens the diplomacy screen (gifts, alliance, peace).
+ * It is the nation's {@code second} (the court character holding that role), whose name and title float over it.
  */
 public class EnvoyEntity extends PathfinderMob {
     private static final EntityDataAccessor<Integer> COLOR = SynchedEntityData.defineId(EnvoyEntity.class, EntityDataSerializers.INT);
@@ -64,7 +68,23 @@ public class EnvoyEntity extends PathfinderMob {
         entityData.set(NATION, Optional.of(nation.id));
         entityData.set(COLOR, nation.color);
         restrictTo(post, 6);
-        setCustomName(net.minecraft.network.chat.Component.translatable("entity.nationsandwar.envoy.of", nation.name));
+        nameplate(nation);
+    }
+
+    /**
+     * The nameplate: the nation's {@code second} role holder (a court character) and the role's name ("Aldric Galvor ·
+     * Chancellor", the role translated when it is a lang key), or "Envoy of &lt;nation&gt;" while the seat is empty.
+     */
+    private void nameplate(Nation nation) {
+        Role second = NpcCourt.second(nation.roles);
+        Persona who = null;
+        if (second != null) for (UUID h : second.holders) if ((who = nation.court.get(h)) != null) break;
+        Component name;
+        if (who == null) name = Component.translatable("entity.nationsandwar.envoy.of", nation.name);
+        else name = Component.literal(who.name() + " · ").append(second.name.startsWith("@")
+                ? Component.translatable(second.name.substring(1)) : Component.literal(second.name));
+        if (!name.equals(getCustomName())) setCustomName(name);
+        setCustomNameVisible(true);
     }
 
     public UUID nation() {
@@ -101,10 +121,13 @@ public class EnvoyEntity extends PathfinderMob {
     @Override
     public void tick() {
         super.tick();
-        if (level().isClientSide || tickCount % 200 != 0) return;
+        if (level().isClientSide || tickCount % 100 != 0) return;
         Nation n = nation() == null ? null : NW.pol(level().getServer()).nations.get(nation());
         if (n == null || !n.npc) discard();
-        else if (n.color != color()) entityData.set(COLOR, n.color);
+        else {
+            if (n.color != color()) entityData.set(COLOR, n.color);
+            nameplate(n);
+        }
     }
 
     @Override

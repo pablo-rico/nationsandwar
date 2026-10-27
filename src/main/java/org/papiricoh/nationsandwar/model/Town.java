@@ -6,6 +6,7 @@ import net.minecraft.nbt.Tag;
 
 import java.util.EnumMap;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
@@ -51,6 +52,8 @@ public final class Town {
     public String managedBy;
     /** Data other mods keep on the town, one key per mod. Saved, never read by this mod. */
     public CompoundTag ext = new CompoundTag();
+    /** NPC towns: the characters who hold its roles ({@link Persona}), by id. Empty for every other town. */
+    public final Map<UUID, Persona> court = new LinkedHashMap<>();
 
     public Town(UUID id, String name, String dimension, long homeChunk) {
         this.id = id;
@@ -128,6 +131,11 @@ public final class Town {
         t.putLong("founded", founded);
         if (managedBy != null) t.putString("managedBy", managedBy);
         if (!ext.isEmpty()) t.put("ext", ext.copy());
+        if (!court.isEmpty()) {
+            ListTag c = new ListTag();
+            for (Persona p : court.values()) c.add(p.save());
+            t.put("court", c);
+        }
         return t;
     }
 
@@ -159,6 +167,10 @@ public final class Town {
         town.founded = t.getLong("founded");
         if (t.contains("managedBy")) town.managedBy = t.getString("managedBy");
         if (t.contains("ext")) town.ext = t.getCompound("ext").copy();
+        for (Tag e : t.getList("court", Tag.TAG_COMPOUND)) {
+            Persona p = Persona.load((CompoundTag) e);
+            town.court.put(p.id(), p);
+        }
         return town;
     }
 }

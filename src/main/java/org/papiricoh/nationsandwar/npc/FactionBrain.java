@@ -15,7 +15,7 @@ import java.util.UUID;
 /**
  * What NPC nations think and decide, once per brain interval (pure). Opinions (−100..100) drift with neighbours (−),
  * allies (+), wars (−) and chance; gifts and slain guards move them from outside. A nation that hates a weaker one goes
- * to war; two NPC nations that like each other ally; a nation losing a war asks for peace.
+ * to war; two NPC nations that like each other ally; a nation losing a war, or bled of its fighters, asks for peace.
  */
 public final class FactionBrain {
     public static final int WAR_BELOW = -50, ALLY_ABOVE = 60, ACCEPT_ALLIANCE = 40, ACCEPT_PEACE = -20, BORDER_CHUNKS = 12;
@@ -78,7 +78,8 @@ public final class FactionBrain {
                 boolean attackerSide = current.attackers.contains(n.id);
                 int mine = attackerSide ? current.scoreAttackers : current.scoreDefenders, theirs = attackerSide ? current.scoreDefenders : current.scoreAttackers;
                 boolean primary = current.attacker.equals(n.id) || current.defender.equals(n.id);
-                if (primary && current.phase == War.Phase.ACTIVE && theirs >= Math.max(6, mine * 2))
+                boolean bled = org.papiricoh.nationsandwar.war.WarPlanner.shouldRetreat(current.losses.getOrDefault(n.id, 0), strength(pol, n));
+                if (primary && current.phase == War.Phase.ACTIVE && (theirs >= Math.max(6, mine * 2) || bled))
                     out.add(new Decision(Kind.OFFER_PEACE, n.id, attackerSide ? current.defender : current.attacker));
                 continue;
             }

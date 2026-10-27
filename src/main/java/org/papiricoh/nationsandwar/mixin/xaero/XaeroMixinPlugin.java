@@ -8,7 +8,7 @@ import org.spongepowered.asm.mixin.extensibility.IMixinInfo;
 import java.util.List;
 import java.util.Set;
 
-/** Applies the Xaero mixins only when their mod is there (the minimap's only without the World Map). */
+/** Applies the Xaero mixins only when their mod is there (the World Map's names and highlights; the minimap's only without the World Map). */
 public final class XaeroMixinPlugin implements IMixinConfigPlugin {
     private static boolean loaded(String id) {
         LoadingModList list = LoadingModList.get();
@@ -17,7 +17,7 @@ public final class XaeroMixinPlugin implements IMixinConfigPlugin {
 
     @Override
     public boolean shouldApplyMixin(String target, String mixin) {
-        if (mixin.endsWith("WorldMapRegistryMixin")) return loaded("xaeroworldmap");
+        if (mixin.endsWith("WorldMapRegistryMixin") || mixin.endsWith("WorldMapLabelsMixin")) return loaded("xaeroworldmap");
         if (mixin.endsWith("MinimapRegistryMixin")) return loaded("xaerominimap") && !loaded("xaeroworldmap");
         return true;
     }

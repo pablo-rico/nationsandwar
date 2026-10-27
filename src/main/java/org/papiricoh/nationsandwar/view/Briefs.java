@@ -45,17 +45,19 @@ public record Briefs(List<TownBrief> towns, List<ProvinceBrief> provinces, List<
         }
     }
 
-    public record ProvinceBrief(UUID id, String name, UUID nation) {
+    /** @param color the colour maps show (picked, or a shade of the nation's) */
+    public record ProvinceBrief(UUID id, String name, UUID nation, int color) {
         CompoundTag write() {
             CompoundTag t = new CompoundTag();
             t.putUUID("id", id);
             t.putString("name", name);
             t.putUUID("nation", nation);
+            t.putInt("color", color);
             return t;
         }
 
         static ProvinceBrief read(CompoundTag t) {
-            return new ProvinceBrief(t.getUUID("id"), t.getString("name"), t.getUUID("nation"));
+            return new ProvinceBrief(t.getUUID("id"), t.getString("name"), t.getUUID("nation"), t.getInt("color"));
         }
     }
 

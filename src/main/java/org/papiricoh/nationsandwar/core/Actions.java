@@ -48,6 +48,14 @@ public final class Actions {
                 Sync.sendView(p);
             }
             case "close" -> Sync.watch(p, false);
+            case "inspect" -> {
+                UUID id = null;
+                try {
+                    id = UUID.fromString(payload.args().getString("id"));
+                } catch (IllegalArgumentException ignored) {
+                }
+                Sync.sendTree(p, payload.args().getString("scope"), id);
+            }
             default -> {
                 Result r = run(p, payload.action(), payload.args());
                 NW.reply(p, r);
@@ -202,6 +210,8 @@ public final class Actions {
             }
             case "province.rename":
                 return pol.renameProvince(me, province(pol, a), a.getString("name"));
+            case "province.color":
+                return pol.setProvinceColor(me, province(pol, a), a.getInt("color"));
             case "province.delete":
                 return pol.deleteProvince(me, province(pol, a));
 

@@ -322,6 +322,11 @@ public final class NWCommands {
                             t.putString("province", provinceId(c));
                             t.putString("name", StringArgumentType.getString(c, "name"));
                         })))))
+                .then(Commands.literal("color").then(provinceArg().then(Commands.argument("hex", StringArgumentType.word())
+                        .executes(ctx -> run(ctx, "province.color", (c, t) -> {
+                            t.putString("province", provinceId(c));
+                            t.putInt("color", Integer.parseInt(StringArgumentType.getString(c, "hex").replace("#", ""), 16));
+                        })))))
                 .then(Commands.literal("delete").then(provinceArg().executes(ctx -> run(ctx, "province.delete", (c, t) -> t.putString("province", provinceId(c))))))
                 .then(Commands.literal("list").executes(ctx -> listProvinces(ctx.getSource())));
     }

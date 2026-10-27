@@ -8,6 +8,7 @@ import org.papiricoh.nationsandwar.model.Alliance;
 import org.papiricoh.nationsandwar.model.Flag;
 import org.papiricoh.nationsandwar.model.Nation;
 import org.papiricoh.nationsandwar.model.Perm;
+import org.papiricoh.nationsandwar.model.Persona;
 import org.papiricoh.nationsandwar.model.Politics;
 import org.papiricoh.nationsandwar.model.Province;
 import org.papiricoh.nationsandwar.model.Role;
@@ -15,6 +16,7 @@ import org.papiricoh.nationsandwar.model.RoleTree;
 import org.papiricoh.nationsandwar.model.Town;
 import org.papiricoh.nationsandwar.view.PoliticsView;
 import org.papiricoh.nationsandwar.view.SiegeBrief;
+import org.papiricoh.nationsandwar.view.TreeView;
 import org.papiricoh.nationsandwar.war.War;
 import org.papiricoh.nationsandwar.war.WarService;
 
@@ -76,11 +78,7 @@ public final class ViewBuilder {
     }
 
     private static PoliticsView.TownView town(MinecraftServer server, Politics pol, Town t, UUID me) {
-        List<PoliticsView.Member> residents = new ArrayList<>();
-        for (UUID r : t.residents) {
-            Role role = t.roles.roleOf(r);
-            residents.add(new PoliticsView.Member(r, NW.name(server, r), role == null ? -1 : role.id, NW.online(server, r)));
-        }
+        List<PoliticsView.Member> residents = members(server, t.residents, t.roles);
         int flags = 0;
         for (Flag f : Flag.values()) if (t.flags.getOrDefault(f, f.defaultOn)) flags |= 1 << f.ordinal();
         EnumSet<Perm> mine = EnumSet.noneOf(Perm.class);
@@ -96,30 +94,80 @@ public final class ViewBuilder {
         });
         return new PoliticsView.TownView(t.id, t.name, t.color, t.dimension, t.homeChunk, t.spawn, t.level().name(), t.claims.size(),
                 pol.maxClaims(t), t.outposts.size(), pol.rules.maxOutposts(), t.bank, flags, t.perms.bits(), t.open, t.npc, t.nation, t.province,
-                residents, roles(t.roles), Perm.mask(mine), pol.rules.nextClaimCost(t.claims.size()), cs);
+                residents, roles(t.roles, false), Perm.mask(mine), pol.rules.nextClaimCost(t.claims.size()), cs);
+    }
+
+    /**
+     * The rank tree of any town ({@code scope} "town") or nation ("nation") for the Atlas; the perms of its ranks only for
+     * the viewer's own town or nation.
+     */
+    public static TreeView tree(ServerPlayer player, String scope, UUID id) {
+        MinecraftServer server = player.getServer();
+        Politics pol = NW.pol(server);
+        UUID me = player.getUUID();
+        if ("nation".equals(scope)) {
+            Nation n = id == null ? null : pol.nations.get(id);
+            if (n == null) return TreeView.missing(scope, id);
+            boolean mine = pol.citizens(n).contains(me);
+            return new TreeView(scope, n.id, n.name, n.color, n.government.id(), "", n.managedBy == null ? "" : n.managedBy, n.npc, mine, !mine,
+                    roles(n.roles, !mine), court(members(server, pol.citizens(n), n.roles), n.court, n.roles), provinces(server, pol, n));
+        }
+        Town t = id == null ? null : pol.towns.get(id);
+        if (t == null) return TreeView.missing("town", id);
+        boolean mine = t.residents.contains(me);
+        return new TreeView("town", t.id, t.name, t.color, "", t.level().name(), t.managedBy == null ? "" : t.managedBy, t.npc, mine, !mine,
+                roles(t.roles, !mine), court(members(server, t.residents, t.roles), t.court, t.roles), List.of());
+    }
+
+    private static List<PoliticsView.Member> members(MinecraftServer server, java.util.Collection<UUID> people, RoleTree tree) {
+        List<PoliticsView.Member> out = new ArrayList<>();
+        for (UUID c : people) {
+            Role role = tree.roleOf(c);
+            out.add(new PoliticsView.Member(c, NW.name(server, c), role == null ? -1 : role.id, NW.online(server, c), false, 0));
+        }
+        return out;
+    }
+
+    /**
+     * Adds the court's characters who hold a role in {@code tree} (governors too) as {@code npc} members, for the Atlas.
+     * Only the Atlas gets them: the town and nation tabs list real residents and citizens.
+     */
+    private static List<PoliticsView.Member> court(List<PoliticsView.Member> out, java.util.Map<UUID, Persona> court, RoleTree tree) {
+        if (court.isEmpty()) return out;
+        java.util.Set<UUID> seated = new java.util.HashSet<>();
+        for (Role r : tree.all()) seated.addAll(r.holders);
+        for (Persona p : court.values()) {
+            if (!seated.contains(p.id())) continue;
+            Role role = tree.roleOf(p.id());
+            out.add(new PoliticsView.Member(p.id(), p.name(), role == null ? -1 : role.id, false, true, p.skin()));
+        }
+        return out;
+    }
+
+    private static List<PoliticsView.ProvinceView> provinces(MinecraftServer server, Politics pol, Nation n) {
+        List<PoliticsView.ProvinceView> out = new ArrayList<>();
+        for (UUID pid : n.provinces) {
+            Province p = pol.provinces.get(pid);
+            if (p != null) out.add(new PoliticsView.ProvinceView(p.id, p.name, pol.provinceColor(p), p.color >= 0, p.governor, NW.name(server, p.governor),
+                    p.capital, List.copyOf(p.towns)));
+        }
+        return out;
     }
 
     private static PoliticsView.NationView nation(MinecraftServer server, Politics pol, Nation n, UUID me) {
-        List<PoliticsView.ProvinceView> provinces = new ArrayList<>();
-        for (UUID pid : n.provinces) {
-            Province p = pol.provinces.get(pid);
-            if (p != null) provinces.add(new PoliticsView.ProvinceView(p.id, p.name, p.governor, NW.name(server, p.governor), p.capital, List.copyOf(p.towns)));
-        }
-        List<PoliticsView.Member> citizens = new ArrayList<>();
-        for (UUID c : pol.citizens(n)) {
-            Role role = n.roles.roleOf(c);
-            citizens.add(new PoliticsView.Member(c, NW.name(server, c), role == null ? -1 : role.id, NW.online(server, c)));
-        }
+        List<PoliticsView.ProvinceView> provinces = provinces(server, pol, n);
+        List<PoliticsView.Member> citizens = members(server, pol.citizens(n), n.roles);
         EnumSet<Perm> mine = pol.citizens(n).contains(me) ? n.roles.permsOf(me) : EnumSet.noneOf(Perm.class);
         return new PoliticsView.NationView(n.id, n.name, n.color, n.government.id(), n.capital, n.bank, n.alliance, n.npc, List.copyOf(n.towns),
-                provinces, citizens, roles(n.roles), Perm.mask(mine), n.overlord, n.vassalUntil, List.copyOf(n.invites));
+                provinces, citizens, roles(n.roles, false), Perm.mask(mine), n.overlord, n.vassalUntil, List.copyOf(n.invites));
     }
 
-    private static List<PoliticsView.RoleView> roles(RoleTree tree) {
+    /** A tree's ranks; {@code hidePerms} sends every rank's perms as 0. */
+    private static List<PoliticsView.RoleView> roles(RoleTree tree, boolean hidePerms) {
         List<PoliticsView.RoleView> out = new ArrayList<>();
         for (Role r : tree.all()) {
-            out.add(new PoliticsView.RoleView(r.id, r.kind.name(), r.name, r.color, r.parent, r.kind == Role.Kind.LEADER ? Perm.mask(EnumSet.allOf(Perm.class))
-                    : Perm.mask(r.perms), List.copyOf(r.holders)));
+            int perms = hidePerms ? 0 : r.kind == Role.Kind.LEADER ? Perm.mask(EnumSet.allOf(Perm.class)) : Perm.mask(r.perms);
+            out.add(new PoliticsView.RoleView(r.id, r.kind.name(), r.name, r.color, r.parent, perms, List.copyOf(r.holders)));
         }
         return out;
     }

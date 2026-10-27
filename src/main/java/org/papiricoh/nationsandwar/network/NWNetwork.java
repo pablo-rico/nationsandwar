@@ -8,7 +8,7 @@ import org.papiricoh.nationsandwar.core.Actions;
  * Payload registration. Client handlers are referenced only inside lambdas, so a dedicated server never loads them.
  */
 public final class NWNetwork {
-    private static final String VERSION = "1";
+    private static final String VERSION = "3";
 
     private NWNetwork() {
     }
@@ -26,6 +26,8 @@ public final class NWNetwork {
                 (p, ctx) -> ctx.enqueueWork(() -> org.papiricoh.nationsandwar.client.ClientClaims.self(p)));
         r.playToClient(ViewPayload.TYPE, ViewPayload.STREAM_CODEC,
                 (p, ctx) -> ctx.enqueueWork(() -> org.papiricoh.nationsandwar.client.ClientPolitics.view(p)));
+        r.playToClient(TreePayload.TYPE, TreePayload.STREAM_CODEC,
+                (p, ctx) -> ctx.enqueueWork(() -> org.papiricoh.nationsandwar.client.ClientPolitics.tree(p)));
         r.playToClient(NoticePayload.TYPE, NoticePayload.STREAM_CODEC,
                 (p, ctx) -> ctx.enqueueWork(() -> org.papiricoh.nationsandwar.client.ClientPolitics.notice(p)));
         r.playToClient(OpenScreenPayload.TYPE, OpenScreenPayload.STREAM_CODEC,

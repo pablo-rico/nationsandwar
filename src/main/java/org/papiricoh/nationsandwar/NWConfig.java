@@ -13,12 +13,13 @@ public final class NWConfig {
 
     public static final ModConfigSpec.IntValue WAR_COST, PREPARATION_MINUTES, DURATION_MINUTES, TARGET_SCORE, KILL_POINTS, CHUNK_POINTS,
             CORE_POINTS, MIN_DEFENDERS_ONLINE, SIEGE_RADIUS, MAX_SIEGES, CORE_HITS, TREATY_MINUTES, VASSAL_DAYS, MAX_VASSAL_DAYS,
-            WAR_COOLDOWN_MINUTES;
+            WAR_COOLDOWN_MINUTES, GARRISON;
     public static final ModConfigSpec.DoubleValue CONTROL_RATE, CONTROL_DECAY, TRIBUTE_SHARE;
 
     public static final ModConfigSpec.BooleanValue NPC_VILLAGES, NPC_WARS;
     public static final ModConfigSpec.DoubleValue VILLAGE_CHANCE;
-    public static final ModConfigSpec.IntValue VILLAGE_RADIUS, GROUP_DISTANCE, MAX_NPC_TOWNS, GUARDS_PER_TOWN, BRAIN_INTERVAL, WAR_PARTY_SIZE;
+    public static final ModConfigSpec.IntValue VILLAGE_RADIUS, GROUP_DISTANCE, MAX_NPC_TOWNS, GUARDS_PER_TOWN, BRAIN_INTERVAL, WAR_PARTY_SIZE,
+            PLAN_TICKS, COURT_CHANGE_DAYS;
 
     static {
         B.comment("Costs in emeralds, paid once (there is no upkeep). Town founding is paid by the founder; claims from the town bank;",
@@ -57,6 +58,7 @@ public final class NWConfig {
         VASSAL_DAYS = B.comment("Default days of vassalage when the loser's capital fell (in-game days).").defineInRange("vassalDays", 7, 0, 365);
         MAX_VASSAL_DAYS = B.defineInRange("maxVassalDays", 14, 0, 365);
         WAR_COOLDOWN_MINUTES = B.comment("Minutes after a war before the same two nations may fight again.").defineInRange("warCooldownMinutes", 60, 0, 43200);
+        GARRISON = B.comment("NPC soldiers left behind in each chunk their side takes.").defineInRange("garrison", 2, 0, 16);
         B.pop();
 
         B.push("npc");
@@ -69,6 +71,8 @@ public final class NWConfig {
         BRAIN_INTERVAL = B.comment("Ticks between NPC nations' decisions (24000 = one day).").defineInRange("brainInterval", 24000, 1200, 240000);
         NPC_WARS = B.comment("NPC nations may declare wars (on each other and on players).").define("wars", true);
         WAR_PARTY_SIZE = B.defineInRange("warPartySize", 4, 1, 16);
+        PLAN_TICKS = B.comment("Ticks between NPC war plans (new sieges, liberations, reinforcements).").defineInRange("planTicks", 400, 100, 24000);
+        COURT_CHANGE_DAYS = B.comment("Average in-game days between changes in an NPC court (0 = never by chance).").defineInRange("courtChangeDays", 5, 0, 365);
         B.pop();
     }
 

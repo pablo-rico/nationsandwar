@@ -25,7 +25,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * thread (maps, notices, HUD); {@link #listen} to hear about changes.
  */
 public final class ClientClaims {
-    public enum Change {CLAIMS, BRIEFS, SIEGES, SELF}
+    /** What changed; {@code LAYER}: the map layer ({@code compat.MapLayer}) was switched on this client. */
+    public enum Change {CLAIMS, BRIEFS, SIEGES, SELF, LAYER}
 
     private static final Map<String, Map<Long, UUID>> CLAIMS = new HashMap<>();
     private static final Map<UUID, Briefs.TownBrief> TOWNS = new HashMap<>();
@@ -213,6 +214,11 @@ public final class ClientClaims {
 
     public static void listen(java.util.function.Consumer<Change> listener) {
         LISTENERS.add(listener);
+    }
+
+    /** Tells the maps the layer was switched ({@code compat.MapStyle#setLayer}). */
+    public static void layerChanged() {
+        fire(Change.LAYER);
     }
 
     private static void fire(Change c) {

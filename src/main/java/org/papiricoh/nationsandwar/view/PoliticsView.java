@@ -24,18 +24,21 @@ public record PoliticsView(UUID me, long now, TownView town, NationView nation, 
                            List<TownSummary> towns, List<AllianceView> alliances, List<WarView> wars, List<UUID> townInvites,
                            List<UUID> nationInvites, List<UUID> allianceInvites, Prices prices) {
 
-    public record Member(UUID id, String name, int role, boolean online) {
+    /** {@code npc}: a character of an NPC court (never a real player); {@code skin} its guard skin (0..3). */
+    public record Member(UUID id, String name, int role, boolean online, boolean npc, int skin) {
         CompoundTag write() {
             CompoundTag t = new CompoundTag();
             t.putUUID("id", id);
             t.putString("name", name);
             t.putInt("role", role);
             t.putBoolean("online", online);
+            t.putBoolean("npc", npc);
+            t.putInt("skin", skin);
             return t;
         }
 
         static Member read(CompoundTag t) {
-            return new Member(t.getUUID("id"), t.getString("name"), t.getInt("role"), t.getBoolean("online"));
+            return new Member(t.getUUID("id"), t.getString("name"), t.getInt("role"), t.getBoolean("online"), t.getBoolean("npc"), t.getInt("skin"));
         }
     }
 
@@ -109,11 +112,14 @@ public record PoliticsView(UUID me, long now, TownView town, NationView nation, 
         }
     }
 
-    public record ProvinceView(UUID id, String name, UUID governor, String governorName, UUID capital, List<UUID> towns) {
+    /** {@code color}: the colour maps show; {@code picked}: whether it was chosen (false: a shade of the nation's). */
+    public record ProvinceView(UUID id, String name, int color, boolean picked, UUID governor, String governorName, UUID capital, List<UUID> towns) {
         CompoundTag write() {
             CompoundTag t = new CompoundTag();
             t.putUUID("id", id);
             t.putString("name", name);
+            t.putInt("color", color);
+            t.putBoolean("picked", picked);
             Nbt.putUuid(t, "governor", governor);
             t.putString("governorName", governorName);
             Nbt.putUuid(t, "capital", capital);
@@ -122,7 +128,7 @@ public record PoliticsView(UUID me, long now, TownView town, NationView nation, 
         }
 
         static ProvinceView read(CompoundTag t) {
-            return new ProvinceView(t.getUUID("id"), t.getString("name"), Nbt.getUuid(t, "governor"), t.getString("governorName"),
+            return new ProvinceView(t.getUUID("id"), t.getString("name"), t.getInt("color"), t.getBoolean("picked"), Nbt.getUuid(t, "governor"), t.getString("governorName"),
                     Nbt.getUuid(t, "capital"), List.copyOf(Nbt.uuids(t, "towns")));
         }
     }

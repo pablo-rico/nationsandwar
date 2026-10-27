@@ -1,23 +1,24 @@
 package org.papiricoh.nationsandwar.client.screen.tab;
 
 import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.network.chat.Component;
 import org.papiricoh.nationsandwar.client.gui.Draw;
 import org.papiricoh.nationsandwar.client.gui.Ui;
 import org.papiricoh.nationsandwar.client.screen.NationScreen;
-import org.papiricoh.nationsandwar.model.GovernmentType;
+import org.papiricoh.nationsandwar.client.screen.modal.GovernmentModal;
+import org.papiricoh.nationsandwar.client.screen.modal.TextModal;
 import org.papiricoh.nationsandwar.view.PoliticsView;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 /**
  * My town, nation and alliance at a glance as three raised cards, the invitations waiting for me with buttons to accept
- * them, and the forms to found a town (when I have none) or a nation (when my town has none and I am its mayor).
+ * them, and my wars. The action bar founds a town (when I have none) or a nation (when my town has none), and takes me to
+ * my town's spawn.
  */
 public final class OverviewTab extends Tab {
-    private EditBox townName, nationName;
-    private int gov;
 
     public OverviewTab(NationScreen screen) {
         super(screen);
@@ -34,12 +35,6 @@ public final class OverviewTab extends Tab {
     }
 
     @Override
-    public void init() {
-        townName = field("town", 24, tr("town_name"), false);
-        nationName = field("nation", 24, tr("nation_name"), false);
-    }
-
-    @Override
     public void render(GuiGraphics g, PoliticsView v, float partial) {
         int cw = (w - 16) / 3, ch = 84, cy = y + 6;
         townCard(g, v, x + 2, cy, cw, ch);
@@ -47,7 +42,23 @@ public final class OverviewTab extends Tab {
         allianceCard(g, v, x + 2 + 2 * (cw + 6), cy, cw, ch);
         int by = cy + ch + 12, half = (w - 12) / 2;
         invites(g, v, x + 2, by, half);
-        forms(g, v, x + 10 + half, by, w - half - 12);
+        wars(g, v, x + 10 + half, by, w - half - 12);
+        actionBar(g, acts(v));
+    }
+
+    private List<Act> acts(PoliticsView v) {
+        List<Act> acts = new ArrayList<>();
+        if (v.town() == null) {
+            acts.add(Act.modal(tr("found_town"), Ui.Style.GOLD, null, () -> new TextModal(tr("found_town"), Draw.Icon.TOWN,
+                    tr("found_town_hint", v.prices().town()), "town.found", tr("town_name"), tr("found_cost", v.prices().town()), Ui.Style.GOLD,
+                    view -> view.town() != null ? tr("leave_first") : null, name -> act("town.found", "name", name))));
+            return acts;
+        }
+        if (v.nation() == null)
+            acts.add(Act.modal(tr("found_nation"), Ui.Style.GOLD, leads(v.town().roles(), v.me()) ? null : tr("mayor_only"), () -> new GovernmentModal(true)));
+        acts.add(Act.now(tr("go_spawn"), Ui.Style.NORMAL, null, () -> act("town.spawn")));
+        acts.add(Act.now(tr("open_atlas"), Ui.Style.NORMAL, null, () -> screen.select("atlas")));
+        return acts;
     }
 
     private void townCard(GuiGraphics g, PoliticsView v, int cx, int cy, int cw, int ch) {
@@ -126,38 +137,15 @@ public final class OverviewTab extends Tab {
         return ry + 19;
     }
 
-    private void forms(GuiGraphics g, PoliticsView v, int fx, int fy, int fw) {
-        if (v.town() == null) {
-            heading(g, tr("found_town"), fx, fy, fw);
-            g.drawWordWrap(font, tr("found_town_hint", v.prices().town()), fx, fy + 14, fw, Draw.MUTED);
-            place(townName, fx, fy + 40, fw - 70);
-            ui.button(g, fx + fw - 66, fy + 40, 66, 13, tr("found"), Ui.Style.GOLD, townName.getValue().isBlank() ? tr("type_name") : null, () -> {
-                act("town.found", "name", townName.getValue().trim());
-                screen.clearField(townName);
-            });
-            return;
-        }
-        if (v.nation() == null) {
-            heading(g, tr("found_nation"), fx, fy, fw);
-            boolean mayor = leads(v.town().roles(), v.me());
-            g.drawWordWrap(font, tr("found_nation_hint", v.prices().nation()), fx, fy + 14, fw, Draw.MUTED);
-            place(nationName, fx, fy + 40, fw);
-            GovernmentType gt = GovernmentType.values()[gov];
-            ui.button(g, fx, fy + 57, 14, 13, Component.literal("‹"), Ui.Style.NORMAL, null, () -> gov = (gov + GovernmentType.values().length - 1) % GovernmentType.values().length);
-            Component label = Component.translatable(gt.key()).append(" · ").append(Component.translatable(gt.key("leader")));
-            g.drawCenteredString(font, Draw.fit(font, label, fw - 100), fx + (fw - 70) / 2 + 8, fy + 60, Draw.TEXT);
-            ui.button(g, fx + fw - 86, fy + 57, 14, 13, Component.literal("›"), Ui.Style.NORMAL, null, () -> gov = (gov + 1) % GovernmentType.values().length);
-            Component denied = !mayor ? tr("mayor_only") : nationName.getValue().isBlank() ? tr("type_name") : null;
-            ui.button(g, fx + fw - 68, fy + 57, 68, 13, tr("found"), Ui.Style.GOLD, denied, () -> {
-                act("nation.found", "name", nationName.getValue().trim(), "gov", gt.id());
-                screen.clearField(nationName);
-            });
-            return;
-        }
+    private void wars(GuiGraphics g, PoliticsView v, int fx, int fy, int fw) {
         heading(g, tr("wars_title"), fx, fy, fw);
         int ry = fy + 14;
+        if (v.town() == null || v.nation() == null) {
+            g.drawWordWrap(font, tr(v.town() == null ? "no_town_bar" : "no_nation_bar"), fx + 2, ry + 2, fw - 4, Draw.MUTED);
+            return;
+        }
         for (PoliticsView.WarView war : v.wars()) {
-            if (ry > y + h - 14) break;
+            if (ry > y + h - BAR - 14) break;
             boolean att = war.attackers().contains(v.nation().id());
             UUID foe = att ? war.defender() : war.attacker();
             int color = nationColor(v, foe);

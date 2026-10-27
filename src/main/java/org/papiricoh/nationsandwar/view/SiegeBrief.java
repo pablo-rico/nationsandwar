@@ -10,10 +10,11 @@ import java.util.UUID;
 
 /**
  * A running siege as clients see it, refreshed every second ({@code network.SiegesPayload}). {@code control} −1..1: +1 the
- * chunk falls to the besiegers. Colours are the besieging and besieged nations'.
+ * chunk falls to the besiegers. Colours are the besieging and besieged nations'. {@code liberation}: the besiegers are the
+ * town's own side, taking back an occupied chunk.
  */
 public record SiegeBrief(UUID war, int id, UUID town, String dimension, long chunk, long banner, float control,
-                         int besiegerColor, int defenderColor, String besieger, String defender) {
+                         int besiegerColor, int defenderColor, String besieger, String defender, boolean liberation) {
     public CompoundTag write() {
         CompoundTag t = new CompoundTag();
         t.putUUID("war", war);
@@ -27,12 +28,13 @@ public record SiegeBrief(UUID war, int id, UUID town, String dimension, long chu
         t.putInt("dc", defenderColor);
         t.putString("b", besieger);
         t.putString("d", defender);
+        t.putBoolean("lib", liberation);
         return t;
     }
 
     public static SiegeBrief read(CompoundTag t) {
         return new SiegeBrief(t.getUUID("war"), t.getInt("id"), t.getUUID("town"), t.getString("dim"), t.getLong("chunk"), t.getLong("banner"),
-                t.getFloat("control"), t.getInt("bc"), t.getInt("dc"), t.getString("b"), t.getString("d"));
+                t.getFloat("control"), t.getInt("bc"), t.getInt("dc"), t.getString("b"), t.getString("d"), t.getBoolean("lib"));
     }
 
     public static CompoundTag writeAll(List<SiegeBrief> list) {

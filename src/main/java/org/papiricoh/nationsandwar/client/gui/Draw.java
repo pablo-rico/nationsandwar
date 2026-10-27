@@ -130,6 +130,13 @@ public final class Draw {
         line(g, x + depth, y - depth, x + w + depth, y - depth, 0.6f, 0x40FFFFFF);
     }
 
+    /** A small solid triangle centred on (cx, cy): pointing down when {@code down}, else right (tree expanders). */
+    public static void chevron(GuiGraphics g, float cx, float cy, float size, boolean down, int color) {
+        float s = size / 2;
+        if (down) quad(g, cx - s, cy - s / 2, cx + s, cy - s / 2, cx, cy + s * 0.7f, cx, cy + s * 0.7f, color);
+        else quad(g, cx - s / 2, cy - s, cx + s * 0.7f, cy, cx + s * 0.7f, cy, cx - s / 2, cy + s, color);
+    }
+
     /** A progress bar (0..1) in a dark trough. */
     public static void bar(GuiGraphics g, int x, int y, int w, int h, float frac, int color) {
         g.fill(x, y, x + w, y + h, 0xFF0A0C10);

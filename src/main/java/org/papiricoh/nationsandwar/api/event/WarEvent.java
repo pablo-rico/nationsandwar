@@ -119,6 +119,35 @@ public abstract class WarEvent extends NWEvent {
     }
 
     /**
+     * The town's own side took back an occupied chunk ({@code byAttackers}: which side freed it). The occupiers lost the
+     * chunk's points; a freed home chunk closes the Core again.
+     */
+    public static final class ChunkLiberated extends Of {
+        private final Town town;
+        private final long chunk;
+        private final boolean byAttackers;
+
+        public ChunkLiberated(MinecraftServer server, War war, Town town, long chunk, boolean byAttackers) {
+            super(server, war);
+            this.town = town;
+            this.chunk = chunk;
+            this.byAttackers = byAttackers;
+        }
+
+        public Town town() {
+            return town;
+        }
+
+        public long chunk() {
+            return chunk;
+        }
+
+        public boolean byAttackers() {
+            return byAttackers;
+        }
+    }
+
+    /**
      * A town's home chunk fell: its Core may be broken. A town with no Core block (a managed town whose provider resolves
      * the heart itself) waits for {@link WarApi#townFallen}.
      */

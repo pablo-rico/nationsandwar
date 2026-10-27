@@ -37,6 +37,8 @@ public final class War {
     /** Hits each open Core has taken. */
     public final Map<UUID, Integer> coreDamage = new HashMap<>();
     public final List<Siege> sieges = new ArrayList<>();
+    /** Guards and soldiers each nation has lost in this war (NPC nations stop sending more once their reserve is spent). */
+    public final Map<UUID, Integer> losses = new HashMap<>();
     public Outcome outcome = Outcome.NONE;
     /** The side that offered white peace (null: nobody). */
     public Boolean peaceOfferedByAttackers;
@@ -74,6 +76,12 @@ public final class War {
     public void score(boolean attackersSide, int points) {
         if (attackersSide) scoreAttackers += points;
         else scoreDefenders += points;
+    }
+
+    /** Takes back points a side scored (a chunk liberated), never below zero. */
+    public void unscore(boolean attackersSide, int points) {
+        if (attackersSide) scoreAttackers = Math.max(0, scoreAttackers - points);
+        else scoreDefenders = Math.max(0, scoreDefenders - points);
     }
 
     public boolean live() {
@@ -126,6 +134,9 @@ public final class War {
         CompoundTag dmg = new CompoundTag();
         coreDamage.forEach((k, v) -> dmg.putInt(k.toString(), v));
         t.put("coreDamage", dmg);
+        CompoundTag lost = new CompoundTag();
+        losses.forEach((k, v) -> lost.putInt(k.toString(), v));
+        t.put("losses", lost);
         ListTag sl = new ListTag();
         for (Siege s : sieges) sl.add(s.save());
         t.put("sieges", sl);
@@ -159,6 +170,8 @@ public final class War {
         w.fallen.addAll(Nbt.uuids(t, "fallen"));
         CompoundTag dmg = t.getCompound("coreDamage");
         for (String k : dmg.getAllKeys()) w.coreDamage.put(UUID.fromString(k), dmg.getInt(k));
+        CompoundTag lost = t.getCompound("losses");
+        for (String k : lost.getAllKeys()) w.losses.put(UUID.fromString(k), lost.getInt(k));
         for (Tag e : t.getList("sieges", Tag.TAG_COMPOUND)) w.sieges.add(Siege.load((CompoundTag) e));
         if (t.contains("peaceBy")) w.peaceOfferedByAttackers = t.getBoolean("peaceBy");
         if (t.contains("terms")) w.terms = Treaty.load(t.getCompound("terms"));

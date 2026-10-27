@@ -71,7 +71,7 @@ public final class RoleTree {
         }
 
         int color() {
-            return role != null ? role.color() : 0x5C6BC0;
+            return role != null ? role.color() : province.color();
         }
     }
 
@@ -82,8 +82,8 @@ public final class RoleTree {
     private final Map<String, float[]> shown = new HashMap<>();
     private final Map<UUID, PoliticsView.Member> people = new HashMap<>();
     private float panX, panY, zoom = 1, minX, maxX, maxY;
-    private boolean fitted, panning, dragging;
-    private int x0, y0, x1, y1;
+    private boolean fitted, panning, dragging, readOnly;
+    private int x0, y0, x1, y1, tint = 0x888888;
     private long lastFrame;
     private String selected;
     private Node press, hovered, drop;
@@ -98,6 +98,16 @@ public final class RoleTree {
 
     public void select(String key) {
         selected = key;
+    }
+
+    /** The colour of the town or nation the tree belongs to: its court characters' tabards wear it. */
+    public void tint(int color) {
+        this.tint = color & 0xFFFFFF;
+    }
+
+    /** A tree the viewer may only look at: the hint at the bottom says so instead of offering drags. */
+    public void readOnly(boolean readOnly) {
+        this.readOnly = readOnly;
     }
 
     public String selected() {
@@ -248,7 +258,7 @@ public final class RoleTree {
             else {
                 PoliticsView.Member m = people.get(pressPerson);
                 Draw.shadow(g, wmx - 8, wmy - 4, 16, 20, 6);
-                Skins.bust(g, pressPerson, m == null ? "" : m.name(), wmx, wmy - 2, BUST * 1.3f, -28, 60);
+                bust(g, pressPerson, m == null ? "" : m.name(), wmx, wmy - 2, BUST * 1.3f, 60);
             }
             pose.popPose();
         }
@@ -339,6 +349,13 @@ public final class RoleTree {
         return n.province != null ? n.province.governorName() : "";
     }
 
+    /** A holder's bust: a court character's guard skin and tinted tabard, or a player's skin (never looked up for an NPC). */
+    private void bust(GuiGraphics g, UUID id, String name, float x, float y, float size, float z) {
+        PoliticsView.Member m = people.get(id);
+        if (m != null && m.npc()) Skins.npcBust(g, m.skin(), tint, x, y, size, -28, z);
+        else Skins.bust(g, id, name, x, y, size, -28, z);
+    }
+
     private void vacant(GuiGraphics g, float x, float y) {
         float cx = x + CW / 2, cy = y + 20;
         int c = 0x30FFFFFF;
@@ -356,7 +373,7 @@ public final class RoleTree {
             float bx = left + i * BUST_STEP, neck = y + 26;
             if (!(dragging && id.equals(pressPerson))) {
                 Draw.rect(g, bx - 8, y + 39, 16, 2, 0x40000000);
-                Skins.bust(g, id, name(id, n), bx, neck, BUST, -28, ghost ? 20 : 12);
+                bust(g, id, name(id, n), bx, neck, BUST, ghost ? 20 : 12);
             }
             PoliticsView.Member m = people.get(id);
             if (m != null && m.online()) Draw.rect(g, bx + 6, y + 16, 3, 3, Draw.GOOD);
@@ -365,10 +382,13 @@ public final class RoleTree {
             Draw.text(g, font, label, bx - font.width(label) * scale / 2, y + 44, scale, Draw.TEXT, false);
             if (!ghost && !dragging) {
                 float wmx = worldX(ui.mx), wmy = worldY(ui.my);
-                if (wmx >= bx - BUST_STEP / 2 && wmx < bx + BUST_STEP / 2 && wmy >= y + 14 && wmy < y + 50 && ui.mx >= x0 && ui.mx < x1 && ui.my >= y0 && ui.my < y1)
-                    ui.tip(ui.mx, ui.my, 1, 1, Component.literal(name(id, n)),
-                            Component.translatable("nationsandwar.gui." + (m != null && m.online() ? "online" : "offline")).withStyle(s -> s.withColor(0x8C95A7)),
+                if (wmx >= bx - BUST_STEP / 2 && wmx < bx + BUST_STEP / 2 && wmy >= y + 14 && wmy < y + 50 && ui.mx >= x0 && ui.mx < x1 && ui.my >= y0 && ui.my < y1) {
+                    Component online = Component.translatable("nationsandwar.gui." + (m != null && m.npc() ? "npc_character"
+                            : m != null && m.online() ? "online" : "offline")).withStyle(s -> s.withColor(0x8C95A7));
+                    if (readOnly || m != null && m.npc()) ui.tip(ui.mx, ui.my, 1, 1, Component.literal(name(id, n)), online);
+                    else ui.tip(ui.mx, ui.my, 1, 1, Component.literal(name(id, n)), online,
                             Component.translatable("nationsandwar.gui.drag_person").withStyle(s -> s.withColor(0x6A7384)));
+                }
             }
         }
         if (holders.size() > max) {
@@ -380,11 +400,12 @@ public final class RoleTree {
     private void footer(GuiGraphics g, Node n, float x, float y) {
         Component info;
         if (n.province != null) info = Component.translatable("nationsandwar.gui.n_towns", n.province.towns().size());
+        else if (readOnly) info = Component.translatable("nationsandwar.gui.holders", n.role.holders().size());
         else if ("LEADER".equals(n.role.kind())) info = Component.translatable("nationsandwar.gui.all_perms");
         else info = Component.translatable("nationsandwar.gui.n_perms", Integer.bitCount(n.role.perms()));
         Draw.rect(g, x, y + CH - 9, CW, 9, 0x40000000);
         Draw.text(g, font, info, x + 4, y + CH - 7, 0.55f, 0xFF9AA3B5, false);
-        if (n.role != null) {
+        if (n.role != null && !readOnly) {
             Component c = Component.literal(String.valueOf(n.role.holders().size()));
             Draw.text(g, font, c, x + CW - 4 - font.width(c) * 0.55f, y + CH - 7, 0.55f, 0xFF9AA3B5, false);
         }
@@ -395,7 +416,7 @@ public final class RoleTree {
         bx -= ui.button(g, bx - 14, y0 + 4, 14, 13, Component.literal("+"), Ui.Style.NORMAL, null, () -> zoomAt((x0 + x1) / 2.0, (y0 + y1) / 2.0, zoom * 1.25f)) + 2;
         bx -= ui.button(g, bx - 14, y0 + 4, 14, 13, Component.literal("−"), Ui.Style.NORMAL, null, () -> zoomAt((x0 + x1) / 2.0, (y0 + y1) / 2.0, zoom / 1.25f)) + 2;
         ui.button(g, bx - 28, y0 + 4, 28, 13, Component.translatable("nationsandwar.gui.fit"), Ui.Style.NORMAL, null, this::fit);
-        Component hint = Component.translatable("nationsandwar.gui.tree_hint");
+        Component hint = Component.translatable("nationsandwar.gui." + (readOnly ? "tree_hint_read" : "tree_hint"));
         Draw.text(g, font, Draw.fit(font, hint, (int) ((x1 - x0 - 8) / 0.6f)), x0 + 4, y1 - 8, 0.6f, 0xFF7A8396, false);
     }
 
@@ -440,6 +461,8 @@ public final class RoleTree {
         float wx = worldX(mx), wy = worldY(my);
         press = hit(wx, wy);
         pressPerson = press == null ? null : personAt(press, wx, wy);
+        PoliticsView.Member who = pressPerson == null ? null : people.get(pressPerson);
+        if (who != null && who.npc()) pressPerson = null;
         pressX = mx;
         pressY = my;
         dragging = false;

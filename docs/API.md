@@ -79,13 +79,15 @@ Records (`Nation`, `Town`, `Alliance`, `war.War`) are the live ones:
 | `TownEvent` | `Founded`, `Removed`, `Renamed`, `ResidentJoined`, `ResidentLeft`, `Claimed`, `Unclaimed`, `ChunkTransferred` |
 | `NationEvent` | `Founded`, `Removed`, `Renamed`, `LeaderChanged`, `TownJoined`, `TownLeft` |
 | `AllianceEvent` | `Joined`, `Left` |
-| `WarEvent` | `Declare`, `Started`, `PhaseChanged`, `SiegeStarted`, `ChunkTaken`, `CoreOpened`, `TownFallen`, `Ended`, `TreatyApplied` |
+| `WarEvent` | `Declare`, `Started`, `PhaseChanged`, `SiegeStarted`, `ChunkTaken`, `ChunkLiberated`, `CoreOpened`, `TownFallen`, `Ended`, `TreatyApplied` |
 
 Citizenship follows towns. A player leaves a nation through any of these:
 - `TownEvent.ResidentLeft`;
 - `NationEvent.TownLeft`;
 - `TownEvent.Removed`;
 - `NationEvent.Removed`.
+
+Since v0.4, `Nation.leader()`, `Town.mayor()` and `LeaderChanged.after()` may be an NPC court character, not a player: check `Politics.persona(id)` first.
 
 ## Protection exceptions (`ProtectionBypass`)
 - **`openZone(key, dim, AABB, Set<Bypass>)`** switches protection off inside a box until `close(key)` / `closeAll(prefix)`.

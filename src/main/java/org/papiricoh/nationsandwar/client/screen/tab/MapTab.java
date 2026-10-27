@@ -11,7 +11,9 @@ import net.minecraft.world.level.material.MapColor;
 import org.papiricoh.nationsandwar.client.ClientClaims;
 import org.papiricoh.nationsandwar.client.gui.Draw;
 import org.papiricoh.nationsandwar.client.gui.Ui;
+import org.papiricoh.nationsandwar.client.map.MapLabels;
 import org.papiricoh.nationsandwar.client.screen.NationScreen;
+import org.papiricoh.nationsandwar.compat.MapLayer;
 import org.papiricoh.nationsandwar.compat.MapStyle;
 import org.papiricoh.nationsandwar.model.Perm;
 import org.papiricoh.nationsandwar.view.Briefs;
@@ -27,14 +29,19 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * The mod's own claim map (the fallback when JourneyMap and Xaero's are absent): a chunk grid around the player over the
- * terrain's map colours, claims in their {@link MapStyle} colours with borders, besieged and occupied chunks hatched, a
- * hover tooltip, and click-or-drag to claim free chunks (or unclaim my own) with the outpost toggle. Right-drag pans,
- * the wheel zooms. Land of a nation run by another mod is darker and striped in its colour; clicking it shows that nation's
- * card ({@link Tab#managedCard}) over the map.
+ * The mod's own claim map: a chunk grid around the player over the terrain's map colours, claims coloured by the chosen
+ * {@link MapLayer} (nations, provinces, towns or alliances; the same choice JourneyMap and Xaero's follow) with thick
+ * borders between groups and dotted ones between the towns inside, the groups' names written across their land
+ * ({@link MapLabels}), besieged and occupied chunks hatched, a hover tooltip with the town's whole standing, and
+ * click-or-drag to claim free chunks (or unclaim my own) with the outpost toggle; Alt+click opens the land's nation (or
+ * town, on the towns layer) in the Atlas. Right-drag pans, the wheel zooms. Land
+ * of a nation run by another mod is darker and striped in its colour; clicking it shows that nation's card
+ * ({@link Tab#managedCard}) over the map.
  */
 public final class MapTab extends Tab {
     private static final int MAX_SAMPLES_PER_FRAME = 96;
+    /** The zoom steps: GUI pixels per chunk. */
+    private static final int[] ZOOM = {2, 3, 4, 6, 8, 11, 16};
     private final Map<Long, Integer> terrain = new HashMap<>();
     private final Set<Long> painted = new HashSet<>();
     private float panX, panZ;
@@ -86,7 +93,7 @@ public final class MapTab extends Tab {
         mapX = x + 2;
         mapY = y + 18;
         mapW = w - 4;
-        mapH = h - 32;
+        mapH = h - 33;
         centreX = (float) (mc.player.getX() / 16) + panX;
         centreZ = (float) (mc.player.getZ() / 16) + panZ;
         Draw.inset(g, mapX - 1, mapY - 1, mapW + 2, mapH + 2);
@@ -94,6 +101,23 @@ public final class MapTab extends Tab {
         Map<Long, UUID> claims = ClientClaims.claims(dim);
         UUID myTown = v.town() == null ? null : v.town().id();
         UUID myNation = v.nation() == null ? null : v.nation().id();
+        Long[] hovered = {null};
+        g.drawManaged(() -> hovered[0] = grid(g, v, mc, dim, claims, myTown, myNation));
+        Long over = hovered[0];
+        MapLabels.draw(g, font, dim, mapX + mapW / 2f, mapY + mapH / 2f, centreX, centreZ, cell);
+        if (over != null) {
+            int hx = sx(ChunkPos.getX(over)), hy = sy(ChunkPos.getZ(over));
+            Draw.frame(g, hx - 1, hy - 1, cell + 2, cell + 2, 0xFFFFFFFF);
+        }
+        playerMarker(g, mc);
+        ui.unclip(g);
+        if (managedCard(g)) over = null;
+        if (over != null) hoverTip(v, dim, claims, over, myTown, myNation);
+        bottomBar(g, v, y + h - 13);
+    }
+
+    /** The terrain and the claims, cell by cell (batched by the caller); returns the hovered chunk's key or null. */
+    private Long grid(GuiGraphics g, PoliticsView v, Minecraft mc, String dim, Map<Long, UUID> claims, UUID myTown, UUID myNation) {
         int x0 = Mth.floor(centreX - mapW / 2f / cell) - 1, x1 = Mth.ceil(centreX + mapW / 2f / cell) + 1;
         int z0 = Mth.floor(centreZ - mapH / 2f / cell) - 1, z1 = Mth.ceil(centreZ + mapH / 2f / cell) + 1;
         int samples = 0, phase = (int) (mc.level.getGameTime() / 4 % 4);
@@ -117,14 +141,15 @@ public final class MapTab extends Tab {
                     boolean managed = MapStyle.managed(t);
                     float opacity = managed ? Math.max(0.75f, MapStyle.managedOpacity()) : Math.max(0.6f, MapStyle.fillOpacity());
                     g.fill(sx, sy, sx + cell, sy + cell, Draw.alpha(fill, (int) (255 * opacity)));
-                    int edge = owner.equals(myTown) ? Draw.GOLD : ClientClaims.enemies(myNation, t.nation()) ? Draw.BAD
-                            : ClientClaims.allied(myNation, t.nation()) ? Draw.GOOD
-                            : managed ? Draw.opaque(MapStyle.accent(t)) : Draw.opaque(Draw.mix(ClientClaims.mapColor(t), 0xFFFFFF, 0.45f));
+                    int edge = ClientClaims.enemies(myNation, t.nation()) ? Draw.BAD : ClientClaims.allied(myNation, t.nation()) && t.nation() != null
+                            && !t.nation().equals(myNation) ? Draw.GOOD : managed ? Draw.opaque(MapStyle.accent(t))
+                            : Draw.opaque(Draw.mix(MapStyle.group(t).color(), 0xFFFFFF, 0.45f));
                     if (managed && MapStyle.state(dim, t, key) == MapStyle.State.NORMAL) stripes(g, sx, sy, Draw.alpha(MapStyle.accent(t), 0xB0));
-                    if (MapStyle.edge(claims, owner, cx, cz, 0, -1)) g.fill(sx, sy, sx + cell, sy + 1, edge);
-                    if (MapStyle.edge(claims, owner, cx, cz, 0, 1)) g.fill(sx, sy + cell - 1, sx + cell, sy + cell, edge);
-                    if (MapStyle.edge(claims, owner, cx, cz, -1, 0)) g.fill(sx, sy, sx + 1, sy + cell, edge);
-                    if (MapStyle.edge(claims, owner, cx, cz, 1, 0)) g.fill(sx + cell - 1, sy, sx + cell, sy + cell, edge);
+                    boolean mine = owner.equals(myTown);
+                    border(g, claims, owner, cx, cz, 0, -1, sx, sy, cell, 1, edge, mine);
+                    border(g, claims, owner, cx, cz, 0, 1, sx, sy + cell - 1, cell, 1, edge, mine);
+                    border(g, claims, owner, cx, cz, -1, 0, sx, sy, 1, cell, edge, mine);
+                    border(g, claims, owner, cx, cz, 1, 0, sx + cell - 1, sy, 1, cell, edge, mine);
                     MapStyle.State state = MapStyle.state(dim, t, key);
                     if (state == MapStyle.State.BESIEGED) Draw.hatch(g, sx, sy, cell, 0xC0FF3030, phase);
                     else if (state == MapStyle.State.OCCUPIED) Draw.hatch(g, sx, sy, cell, 0xB0101010, 0);
@@ -139,15 +164,38 @@ public final class MapTab extends Tab {
                 if (ui.over(sx, sy, cell, cell)) hovered = key;
             }
         }
-        if (hovered != null) {
-            int hx = sx(ChunkPos.getX(hovered)), hy = sy(ChunkPos.getZ(hovered));
-            Draw.frame(g, hx - 1, hy - 1, cell + 2, cell + 2, 0xFFFFFFFF);
+        return hovered;
+    }
+
+    /**
+     * One side of a claimed cell: a thick line where the layer's group ends, a dotted hairline between towns of one
+     * group, gold around my town. ({@code lx}, {@code ly}, {@code lw}, {@code lh}) is the 1-pixel strip on that side; the
+     * group's line grows inwards from it when zoomed in.
+     */
+    private void border(GuiGraphics g, Map<Long, UUID> claims, UUID owner, int cx, int cz, int dx, int dz, int lx, int ly, int lw, int lh,
+                        int edge, boolean mine) {
+        if (MapStyle.groupEdge(claims, owner, cx, cz, dx, dz)) {
+            int t = cell >= 8 ? 2 : 1;
+            int x0 = lx, y0 = ly, x1 = lx + lw, y1 = ly + lh;
+            if (dx == 0) {
+                if (dz < 0) y1 = ly + t;
+                else y0 = ly + 1 - t;
+            } else {
+                if (dx < 0) x1 = lx + t;
+                else x0 = lx + 1 - t;
+            }
+            g.fill(x0, y0, x1, y1, edge);
+            if (mine) g.fill(lx, ly, lx + lw, ly + lh, Draw.GOLD);
+        } else if (MapStyle.edge(claims, owner, cx, cz, dx, dz)) {
+            int color = mine ? Draw.GOLD : 0x70FFFFFF;
+            if (cell < 4) {
+                if (mine) g.fill(lx, ly, lx + lw, ly + lh, color);
+                return;
+            }
+            for (int i = 0; i < Math.max(lw, lh); i += 2)
+                if (lw > lh) g.fill(lx + i, ly, lx + i + 1, ly + 1, color);
+                else g.fill(lx, ly + i, lx + 1, ly + i + 1, color);
         }
-        playerMarker(g, mc);
-        ui.unclip(g);
-        if (managedCard(g)) hovered = null;
-        if (hovered != null) hoverTip(v, dim, claims, hovered, myTown, myNation);
-        legend(g, y + h - 11);
     }
 
     /** Sparse stripes over a cell, continuous across neighbouring cells (the other way to a siege's hatch). */
@@ -211,13 +259,15 @@ public final class MapTab extends Tab {
         Briefs.TownBrief t = owner == null ? null : ClientClaims.town(owner);
         if (t == null) lines.add(tr("wilderness").withStyle(s -> s.withColor(0x9AA3B5)));
         else {
-            Component label = Component.literal(MapStyle.label(t)).withStyle(s -> s.withColor(ClientClaims.mapColor(t)));
+            Component label = Component.literal(t.name()).withStyle(s -> s.withColor(Draw.mix(Draw.opaque(MapStyle.group(t).color()), 0xFFFFFFFF, 0.3f) & 0xFFFFFF));
             SiegeBrief siege = ClientClaims.siegeAt(dim, key);
             if (siege != null)
                 label = label.copy().append(Component.translatable("nationsandwar.map.besieged", siege.besieger(), Math.round((siege.control() + 1) * 50))
                         .withStyle(s -> s.withColor(0xFF6060)));
             else if (MapStyle.state(dim, t, key) == MapStyle.State.OCCUPIED) label = label.copy().append(tr("occupied_suffix").withStyle(s -> s.withColor(0xB0B0B0)));
             lines.add(label);
+            String standing = MapStyle.hierarchy(t);
+            if (!standing.equals(t.name())) lines.add(Component.literal(standing).withStyle(s -> s.withColor(0x9AA3B5)));
             if (MapStyle.managed(t)) {
                 lines.add(Component.translatable("nationsandwar.managed.badge").withStyle(s -> s.withColor(Draw.MANAGED & 0xFFFFFF)));
                 lines.add(Component.translatable("nationsandwar.managed.inspect").withStyle(s -> s.withColor(0x9AA3B5)));
@@ -225,6 +275,7 @@ public final class MapTab extends Tab {
             String rel = owner.equals(myTown) ? "self" : ClientClaims.enemies(myNation, t.nation()) ? "enemy" : ClientClaims.allied(myNation, t.nation()) ? "ally" : "neutral";
             lines.add(tr("relation." + rel).withStyle(s -> s.withColor(DiplomacyTab.relationColor(rel) & 0xFFFFFF)));
         }
+        if (t != null) lines.add(Component.translatable("nationsandwar.map.alt_atlas").withStyle(s -> s.withColor(0x9AA3B5)));
         lines.add(Component.literal(cx + ", " + cz).withStyle(s -> s.withColor(0x707888)));
         if (v.town() != null) {
             if (t == null && has(v.town().myPerms(), Perm.CLAIM)) lines.add(tr(outpost ? "click_outpost" : "click_claim", v.town().nextClaimCost()).withStyle(s -> s.withColor(0x6FD08A)));
@@ -233,38 +284,71 @@ public final class MapTab extends Tab {
         ui.tip(ui.mx, ui.my, 1, 1, lines);
     }
 
+    /** The layer switch (left) and the zoom and centre buttons (right). */
     private void toolbar(GuiGraphics g, PoliticsView v) {
         int tx = x + 2, ty = y + 2;
-        PoliticsView.TownView t = v.town();
-        if (t != null) {
-            Component claims = Component.translatable("nationsandwar.info.claims").append(": " + t.claims() + "/" + t.maxClaims());
-            g.drawString(font, claims, tx, ty + 3, Draw.TEXT, false);
-            tx += font.width(claims) + 10;
-            Component label = tr("outpost_mode", t.outposts(), t.maxOutposts(), v.prices().outpost());
-            tx += ui.check(g, tx, ty + 1, label, outpost, need(t.myPerms(), Perm.CLAIM), () -> outpost = !outpost) + 10;
+        MapLayer current = MapStyle.layer();
+        for (MapLayer layer : MapLayer.values()) {
+            Component name = Component.translatable(layer.langKey());
+            tx += ui.button(g, tx, ty, 0, 13, name, layer == current ? Ui.Style.GOLD : Ui.Style.NORMAL, null, () -> MapStyle.setLayer(layer)) + 2;
         }
         int rx = x + w - 2;
         rx -= ui.button(g, rx - 46, ty, 46, 13, tr("centre"), Ui.Style.NORMAL, panX == 0 && panZ == 0 ? tr("centred") : null, () -> panX = panZ = 0) + 3;
-        rx -= ui.button(g, rx - 14, ty, 14, 13, Component.literal("+"), Ui.Style.NORMAL, cell >= 16 ? tr("max_zoom") : null, () -> cell = Math.min(16, cell + 2)) + 2;
-        ui.button(g, rx - 14, ty, 14, 13, Component.literal("−"), Ui.Style.NORMAL, cell <= 4 ? tr("max_zoom") : null, () -> cell = Math.max(4, cell - 2));
+        rx -= ui.button(g, rx - 14, ty, 14, 13, Component.literal("+"), Ui.Style.NORMAL, cell >= ZOOM[ZOOM.length - 1] ? tr("max_zoom") : null, () -> zoom(1)) + 2;
+        ui.button(g, rx - 14, ty, 14, 13, Component.literal("−"), Ui.Style.NORMAL, cell <= ZOOM[0] ? tr("max_zoom") : null, () -> zoom(-1));
     }
 
-    private void legend(GuiGraphics g, int ly) {
+    /** Steps the zoom keeping the map's centre. */
+    private void zoom(int dir) {
+        int i = 0;
+        while (i < ZOOM.length - 1 && ZOOM[i] < cell) i++;
+        cell = ZOOM[Mth.clamp(i + dir, 0, ZOOM.length - 1)];
+    }
+
+    /** My claims and the outpost toggle (left), then the legend. */
+    private void bottomBar(GuiGraphics g, PoliticsView v, int by) {
         int lx = x + 2;
-        lx = key(g, lx, ly, Draw.GOLD, tr("my_town"));
-        lx = key(g, lx, ly, Draw.GOOD, tr("relation.ally"));
-        lx = key(g, lx, ly, Draw.BAD, tr("relation.enemy"));
-        lx = key(g, lx, ly, 0xFFFF3030, tr("besieged"));
-        lx = key(g, lx, ly, 0xFF505050, tr("occupied"));
-        g.fill(lx, ly + 1, lx + 7, ly + 8, 0xFF2A2433);
-        for (int i = 0; i < 7; i++) for (int j = 0; j < 7; j++) if (((i - j) & 3) == 0) g.fill(lx + i, ly + 1 + j, lx + i + 1, ly + 2 + j, Draw.MANAGED);
-        Draw.text(g, font, Component.translatable("nationsandwar.managed.badge"), lx + 9, ly + 2, 0.75f, Draw.MUTED, false);
-        Component hint = tr("map_hint");
-        Draw.text(g, font, hint, x + w - 2 - font.width(hint) * 0.7f, ly + 2, 0.7f, 0xFF6A7384, false);
+        PoliticsView.TownView t = v.town();
+        if (t != null) {
+            Component claims = Component.translatable("nationsandwar.info.claims").append(": " + t.claims() + "/" + t.maxClaims());
+            Draw.text(g, font, claims, lx, by + 3, 0.75f, Draw.TEXT, false);
+            lx += (int) (font.width(claims) * 0.75f) + 8;
+            Component label = tr("outpost_mode", t.outposts(), t.maxOutposts(), v.prices().outpost());
+            lx += ui.check(g, lx, by + 1, label, outpost, need(t.myPerms(), Perm.CLAIM), () -> outpost = !outpost) + 12;
+        }
+        legend(g, lx, by + 2);
+    }
+
+    private void legend(GuiGraphics g, int lx, int ly) {
+        int limit = x + w - 12;
+        g.fill(lx, ly + 4, lx + 7, ly + 6, 0xFFD8DCE4);
+        lx = label(g, lx, ly, Component.translatable(MapStyle.layer().langKey()));
+        if (MapStyle.layer() != MapLayer.TOWNS && lx < limit) {
+            for (int i = 0; i < 7; i += 2) g.fill(lx + i, ly + 5, lx + i + 1, ly + 6, 0xB0FFFFFF);
+            lx = label(g, lx, ly, Component.translatable(MapLayer.TOWNS.langKey()));
+        }
+        if (lx < limit) lx = key(g, lx, ly, Draw.GOLD, tr("my_town"));
+        if (lx < limit) lx = key(g, lx, ly, Draw.GOOD, tr("relation.ally"));
+        if (lx < limit) lx = key(g, lx, ly, Draw.BAD, tr("relation.enemy"));
+        if (lx < limit) lx = key(g, lx, ly, 0xFFFF3030, tr("besieged"));
+        if (lx < limit) lx = key(g, lx, ly, 0xFF505050, tr("occupied"));
+        if (lx < limit) {
+            g.fill(lx, ly + 1, lx + 7, ly + 8, 0xFF2A2433);
+            for (int i = 0; i < 7; i++) for (int j = 0; j < 7; j++) if (((i - j) & 3) == 0) g.fill(lx + i, ly + 1 + j, lx + i + 1, ly + 2 + j, Draw.MANAGED);
+            label(g, lx, ly, Component.translatable("nationsandwar.managed.badge"));
+        }
+        int hx = x + w - 10;
+        g.drawString(font, "?", hx + 2, ly + 1, 0xFF6A7384, false);
+        ui.tip(hx, ly - 1, 9, 10, tr("map_hint"));
     }
 
     private int key(GuiGraphics g, int kx, int ky, int color, Component label) {
         g.fill(kx, ky + 1, kx + 7, ky + 8, color);
+        return label(g, kx, ky, label);
+    }
+
+    /** A legend entry's text after its 7-pixel swatch; returns the next entry's x. */
+    private int label(GuiGraphics g, int kx, int ky, Component label) {
         Draw.text(g, font, label, kx + 9, ky + 2, 0.75f, Draw.MUTED, false);
         return kx + 9 + (int) (font.width(label) * 0.75f) + 8;
     }
@@ -292,6 +376,12 @@ public final class MapTab extends Tab {
         long key = chunkAt(mx, my);
         UUID owner = ClientClaims.claims(dim()).get(key);
         Briefs.TownBrief ot = owner == null ? null : ClientClaims.town(owner);
+        if (ot != null && net.minecraft.client.gui.screens.Screen.hasAltDown()) {
+            boolean town = MapStyle.layer() == MapLayer.TOWNS || ot.nation() == null;
+            screen.atlas().focus(town ? "town" : "nation", town ? ot.id() : ot.nation());
+            screen.select("atlas");
+            return true;
+        }
         if (ot != null && ot.nation() != null && MapStyle.managed(ot)) {
             picked = ot.nation();
             return true;
@@ -344,7 +434,7 @@ public final class MapTab extends Tab {
     public boolean mouseScrolled(double mx, double my, double delta) {
         if (!inMap(mx, my)) return false;
         int before = cell;
-        cell = Mth.clamp(cell + (delta > 0 ? 2 : -2), 4, 16);
+        zoom(delta > 0 ? 1 : -1);
         if (cell != before) {
             float wx = centreX + (float) (mx - mapX - mapW / 2f) / before;
             float wz = centreZ + (float) (my - mapY - mapH / 2f) / before;

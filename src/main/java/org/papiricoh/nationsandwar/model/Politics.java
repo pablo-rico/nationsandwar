@@ -70,6 +70,20 @@ public final class Politics {
         return town == null || town.province == null ? null : provinces.get(town.province);
     }
 
+    /** A character of any NPC court (nation or town) by id, or null when {@code id} is not one (a player, say). */
+    public Persona persona(UUID id) {
+        if (id == null) return null;
+        for (Nation n : nations.values()) {
+            Persona p = n.court.get(id);
+            if (p != null) return p;
+        }
+        for (Town t : towns.values()) {
+            Persona p = t.court.get(id);
+            if (p != null) return p;
+        }
+        return null;
+    }
+
     public Set<UUID> citizens(Nation nation) {
         Set<UUID> out = new LinkedHashSet<>();
         for (UUID t : nation.towns) {
@@ -525,6 +539,19 @@ public final class Politics {
         return Result.ok("governor_set");
     }
 
+    /** Names a governor with no checks: an NPC court's character, who is no citizen. */
+    public void appointGovernor(Province p, UUID governor) {
+        Nation n = nations.get(p.nation);
+        if (n != null) setGovernorRaw(n, p, governor);
+    }
+
+    /** Puts a town of the province's nation that is in no province into {@code p}, with no checks of the actor. */
+    public void addToProvince(Province p, Town town) {
+        if (town.province != null || !p.nation.equals(town.nation)) return;
+        p.towns.add(town.id);
+        town.province = p.id;
+    }
+
     private void setGovernorRaw(Nation n, Province p, UUID governor) {
         p.governor = governor;
         Role gov = n.roles.governorRole();
@@ -543,6 +570,18 @@ public final class Politics {
         if (!r.ok()) return r;
         p.name = name.trim();
         return Result.ok("renamed");
+    }
+
+    public Result setProvinceColor(UUID actor, Province p, int color) {
+        if (!canNation(actor, nations.get(p.nation), Perm.MANAGE_PROVINCES)) return Result.fail("no_perm");
+        p.color = color & 0xFFFFFF;
+        return Result.ok("recolored");
+    }
+
+    /** The colour a province shows on maps (see {@link Province#color(int)}). */
+    public int provinceColor(Province p) {
+        Nation n = nations.get(p.nation);
+        return p.color(n == null ? 0x888888 : n.color);
     }
 
     public Result deleteProvince(UUID actor, Province p) {

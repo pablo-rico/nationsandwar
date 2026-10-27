@@ -38,6 +38,7 @@ import org.papiricoh.nationsandwar.model.Town;
 import org.papiricoh.nationsandwar.network.NoticePayload;
 import org.papiricoh.nationsandwar.network.SiegesPayload;
 import org.papiricoh.nationsandwar.npc.GuardEntity;
+import org.papiricoh.nationsandwar.npc.NpcCourt;
 import org.papiricoh.nationsandwar.npc.NpcService;
 import org.papiricoh.nationsandwar.registry.NWRegistry;
 import org.papiricoh.nationsandwar.view.SiegeBrief;
@@ -255,9 +256,18 @@ public final class WarService {
 
     /**
      * A Siege Banner was placed by {@code placer} (a player's or a guard's nation) at {@code pos}. Returns why it may not
-     * stand, or ok after starting the siege.
+     * stand, or ok after starting the siege. A banner of the town's own side in one of its occupied chunks starts a
+     * liberation.
      */
     public static Result plantBanner(ServerLevel level, BlockPos pos, UUID placerNation, boolean npcPlacer) {
+        return openSiege(level, pos, placerNation, npcPlacer, true);
+    }
+
+    /**
+     * Starts a siege at {@code pos}. {@code placed} false: an NPC siege in an unloaded chunk, whose block is placed when
+     * the chunk loads (see {@link Siege#placed}).
+     */
+    public static Result openSiege(ServerLevel level, BlockPos pos, UUID placerNation, boolean npcPlacer, boolean placed) {
         MinecraftServer server = level.getServer();
         NWSavedData data = NW.data(server);
         Politics pol = data.politics;
@@ -265,17 +275,29 @@ public final class WarService {
         Town town = pol.townAt(NW.dim(level), chunk);
         if (town == null || town.nation == null || placerNation == null) return Result.fail("siege.not_enemy");
         War w = activeWar(data, placerNation, town.nation);
+        boolean liberation = false;
+        if (w == null) {
+            for (War x : data.wars.values()) {
+                Boolean mine = x.sideOf(placerNation);
+                if (x.phase == War.Phase.ACTIVE && mine != null && mine.equals(x.sideOf(town.nation)) && x.isOccupied(town.id, chunk)) {
+                    w = x;
+                    liberation = true;
+                    break;
+                }
+            }
+        }
         if (w == null) return Result.fail("siege.no_war");
-        if (w.isOccupied(town.id, chunk)) return Result.fail("siege.occupied");
+        if (!liberation && w.isOccupied(town.id, chunk)) return Result.fail("siege.occupied");
         if (w.siegeAt(NW.dim(level), chunk) != null) return Result.fail("siege.already");
         boolean side = w.sideOf(placerNation);
         long running = w.sieges.stream().filter(s -> s.byAttackers == side).count();
         if (running >= NWConfig.get(NWConfig.MAX_SIEGES)) return Result.fail("siege.too_many", NWConfig.get(NWConfig.MAX_SIEGES));
-        if (!onFront(pol, w, town, chunk)) return Result.fail("siege.not_front");
-        Nation defender = pol.nations.get(town.nation);
+        if (!liberation && !WarPlanner.onFront(w, town, chunk)) return Result.fail("siege.not_front");
         Nation placer = pol.nations.get(placerNation);
-        if (town.managed() && placer != null && !ManagedNations.of(town).mayBesiege(server, town, chunk, placer)) return Result.fail("siege.managed");
-        if (!npcPlacer && !defender.alwaysDefended()) {
+        Nation holder = pol.nations.get(liberation ? (side ? w.defender : w.attacker) : town.nation);
+        if (!liberation && town.managed() && placer != null && !ManagedNations.of(town).mayBesiege(server, town, chunk, placer))
+            return Result.fail("siege.managed");
+        if (!npcPlacer && holder != null && !holder.alwaysDefended()) {
             int online = 0;
             for (UUID n : side ? w.defenders : w.attackers) {
                 Nation dn = pol.nations.get(n);
@@ -286,13 +308,36 @@ public final class WarService {
             if (online < min) return Result.fail("siege.defenders_offline", min);
         }
         Siege s = w.newSiege(town.id, NW.dim(level), chunk, pos.asLong(), side, level.getGameTime());
+        s.liberation = liberation;
+        s.placed = placed;
         NW.changed(server);
-        Nation besieger = pol.nations.get(placerNation);
-        Component sub = Component.literal(town.name + " ← " + (besieger == null ? "?" : besieger.name));
-        notifySides(server, w, Component.translatable("nationsandwar.notice.siege_started"), sub, besieger == null ? 0xFF5555 : besieger.color, "siege");
+        Component sub = Component.literal(town.name + " ← " + (placer == null ? "?" : placer.name));
+        notifySides(server, w, Component.translatable(liberation ? "nationsandwar.notice.liberation_started" : "nationsandwar.notice.siege_started"),
+                sub, placer == null ? 0xFF5555 : placer.color, liberation ? "shield" : "siege");
         NpcService.siegeStarted(server, w, s);
         ApiEvents.queue(new WarEvent.SiegeStarted(server, w, s));
-        return Result.ok("siege.started", town.name);
+        return Result.ok(liberation ? "siege.liberation_started" : "siege.started", town.name);
+    }
+
+    /** Whether a running siege's banner stands at {@code pos} (guards rallied to it go home when it is gone). */
+    public static boolean bannerActive(MinecraftServer server, String dim, BlockPos pos) {
+        for (War w : NW.data(server).wars.values()) {
+            if (w.phase != War.Phase.ACTIVE) continue;
+            for (Siege s : w.sieges) if (s.banner == pos.asLong() && s.dimension.equals(dim)) return true;
+        }
+        return false;
+    }
+
+    /** A guard or soldier of {@code nation} died: one more loss in each live war it fights. */
+    public static void fighterLost(MinecraftServer server, UUID nation) {
+        for (War w : NW.data(server).wars.values()) if (w.live() && w.involves(nation)) w.losses.merge(nation, 1, Integer::sum);
+    }
+
+    /** Whether nobody in this war has players who must be present: NPC and managed nations only (it may run unwatched). */
+    public static boolean unattended(Politics pol, War w) {
+        for (UUID id : w.attackers) if (pol.nations.get(id) != null && !pol.nations.get(id).alwaysDefended()) return false;
+        for (UUID id : w.defenders) if (pol.nations.get(id) != null && !pol.nations.get(id).alwaysDefended()) return false;
+        return true;
     }
 
     /** A banner planted for the API: its block goes in the war's restore log like a player's. */
@@ -301,14 +346,6 @@ public final class WarService {
         Town town = NW.townAt(level, pos);
         War w = town == null ? null : warZone(data, town, NW.chunk(pos));
         if (w != null) data.restoreLog(w.id).record(level, pos, before);
-    }
-
-    /** A chunk may be besieged if it touches land that is not the town's, or a chunk of it already occupied. */
-    private static boolean onFront(Politics pol, War w, Town town, long chunk) {
-        int x = ChunkPos.getX(chunk), z = ChunkPos.getZ(chunk);
-        long[] around = {ChunkPos.asLong(x + 1, z), ChunkPos.asLong(x - 1, z), ChunkPos.asLong(x, z + 1), ChunkPos.asLong(x, z - 1)};
-        for (long c : around) if (!town.claims.contains(c) || w.isOccupied(town.id, c)) return true;
-        return false;
     }
 
     /** A Siege Banner was broken: its siege fails (whoever broke it). */
@@ -332,33 +369,44 @@ public final class WarService {
      * home chunk the Core is simply protected.
      */
     public static boolean hitCore(ServerLevel level, BlockPos pos, ServerPlayer player) {
-        MinecraftServer server = level.getServer();
-        NWSavedData data = NW.data(server);
+        NWSavedData data = NW.data(level.getServer());
         Town town = NW.townAt(level, pos);
         if (town == null || town.core != pos.asLong() || town.nation == null) return false;
-        War w = null;
-        UUID mineId = null;
         for (War x : data.wars.values()) {
             if (x.phase != War.Phase.ACTIVE || !x.involves(town.nation)) continue;
             UUID n = nationIn(data, x, player);
-            if (n != null && x.enemies(n, town.nation)) {
+            if (n == null || !x.enemies(n, town.nation)) continue;
+            int hits = hitCore(level, pos, n), need = NWConfig.get(NWConfig.CORE_HITS);
+            if (hits < 0) return false;
+            if (hits < need) player.displayClientMessage(Component.translatable("nationsandwar.msg.core_hit", hits, need), true);
+            return true;
+        }
+        return false;
+    }
+
+    /** A fighter of {@code nation} (a player, an NPC soldier, the simulation) struck the Core at {@code pos}: the hits so far, or −1 if it did not count. */
+    public static int hitCore(ServerLevel level, BlockPos pos, UUID nation) {
+        MinecraftServer server = level.getServer();
+        NWSavedData data = NW.data(server);
+        Town town = data.politics.townAt(NW.dim(level), NW.chunk(pos));
+        if (town == null || town.core != pos.asLong() || town.nation == null) return -1;
+        War w = null;
+        for (War x : data.wars.values()) {
+            if (x.phase == War.Phase.ACTIVE && x.enemies(nation, town.nation)) {
                 w = x;
-                mineId = n;
                 break;
             }
         }
-        if (w == null || !w.coreOpen.contains(town.id) || w.fallen.contains(town.id)) return false;
+        if (w == null || !w.coreOpen.contains(town.id) || w.fallen.contains(town.id)) return -1;
         int hits = w.coreDamage.merge(town.id, 1, Integer::sum);
         int need = NWConfig.get(NWConfig.CORE_HITS);
-        level.playSound(null, pos, SoundEvents.ANVIL_LAND, SoundSource.BLOCKS, 1f, 0.6f + 0.4f * hits / need);
-        level.sendParticles(ParticleTypes.LAVA, pos.getX() + 0.5, pos.getY() + 0.8, pos.getZ() + 0.5, 8, 0.3, 0.3, 0.3, 0);
-        if (hits >= need) {
-            fall(server, w, town, mineId);
-        } else {
-            player.displayClientMessage(Component.translatable("nationsandwar.msg.core_hit", hits, need), true);
+        if (level.isLoaded(pos)) {
+            level.playSound(null, pos, SoundEvents.ANVIL_LAND, SoundSource.BLOCKS, 1f, 0.6f + 0.4f * hits / need);
+            level.sendParticles(ParticleTypes.LAVA, pos.getX() + 0.5, pos.getY() + 0.8, pos.getZ() + 0.5, 8, 0.3, 0.3, 0.3, 0);
         }
+        if (hits >= need) fall(server, w, town, nation);
         NW.changed(server);
-        return true;
+        return hits;
     }
 
     /** {@code town}'s heart is taken by {@code byNation}: fallen, the Core's points, the notices. */
@@ -371,6 +419,8 @@ public final class WarService {
         Nation by = NW.pol(server).nations.get(byNation);
         notifySides(server, w, Component.translatable("nationsandwar.notice.town_fell"), Component.literal(town.name), by == null ? 0xFF5555 : by.color, "skull");
         ApiEvents.queue(new WarEvent.TownFallen(server, w, town, byNation));
+        Nation owner = NW.pol(server).nations.get(town.nation);
+        if (owner != null && owner.npc && town.id.equals(owner.capital)) NpcCourt.onCapitalFell(server, owner);
         NW.changed(server);
     }
 
@@ -404,7 +454,8 @@ public final class WarService {
                     }
                 }
                 case ACTIVE -> {
-                    for (Siege s : new ArrayList<>(w.sieges)) tickSiege(server, data, w, s);
+                    for (Siege s : new ArrayList<>(w.sieges)) tickSiege(server, data, w, s, now);
+                    if (now / 20 % 60 == 0) simulateCores(server, data, w);
                     any |= !w.sieges.isEmpty();
                     War.Outcome o = WarRules.check(w, target, now);
                     if (o != War.Outcome.NONE) end(server, w, o);
@@ -427,17 +478,34 @@ public final class WarService {
         }
     }
 
-    private static void tickSiege(MinecraftServer server, NWSavedData data, War w, Siege s) {
-        ServerLevel level = null;
-        for (ServerLevel l : server.getAllLevels()) if (NW.dim(l).equals(s.dimension)) level = l;
+    private static void tickSiege(MinecraftServer server, NWSavedData data, War w, Siege s, long now) {
+        ServerLevel level = level(server, s.dimension);
         if (level == null) return;
         BlockPos banner = BlockPos.of(s.banner);
-        if (!level.isLoaded(banner)) return;
+        Set<UUID> besiegers = s.byAttackers ? w.attackers : w.defenders, holders = s.byAttackers ? w.defenders : w.attackers;
+        if (!level.isPositionEntityTicking(banner)) {
+            if (!unattended(data.politics, w)) return;
+            float before = s.control;
+            s.control = SiegeControl.step(s.control, s.lastA, s.lastD, (float) NWConfig.get(NWConfig.CONTROL_RATE), (float) NWConfig.get(NWConfig.CONTROL_DECAY));
+            long second = now / 20;
+            if (WarSim.clash(second, s.id)) {
+                int[] left = WarSim.clash(s.lastA, s.lastD, WarSim.dice(w.id, s.id, second));
+                for (int i = left[0]; i < s.lastA; i++) lose(w, s.byAttackers);
+                for (int i = left[1]; i < s.lastD; i++) lose(w, !s.byAttackers);
+                s.lastA = left[0];
+                s.lastD = left[1];
+            }
+            if (s.lastA <= 0) s.control = -1;
+            if (before != s.control) data.setDirty();
+            resolve(server, data, w, s, level, false);
+            return;
+        }
+        if (!s.placed) place(server, data, w, s, level);
+        banner = BlockPos.of(s.banner);
         if (!level.getBlockState(banner).is(NWRegistry.SIEGE_BANNER.get())) {
             bannerBroken(level, banner);
             return;
         }
-        Set<UUID> besiegers = s.byAttackers ? w.attackers : w.defenders, holders = s.byAttackers ? w.defenders : w.attackers;
         int r = NWConfig.get(NWConfig.SIEGE_RADIUS), a = 0, d = 0;
         for (LivingEntity e : level.getEntitiesOfClass(LivingEntity.class, new AABB(banner).inflate(r), LivingEntity::isAlive)) {
             UUID nation = nationIn(data, w, e);
@@ -445,31 +513,91 @@ public final class WarService {
             if (besiegers.contains(nation)) a++;
             else if (holders.contains(nation)) d++;
         }
+        s.lastA = a;
+        s.lastD = d;
         float before = s.control;
         s.control = SiegeControl.step(s.control, a, d, (float) NWConfig.get(NWConfig.CONTROL_RATE), (float) NWConfig.get(NWConfig.CONTROL_DECAY));
         if (before != s.control) data.setDirty();
+        resolve(server, data, w, s, level, true);
+    }
+
+    /** A simulated fighter of {@code side} fell: counted against the side's primary nation. */
+    private static void lose(War w, boolean attackersSide) {
+        w.losses.merge(attackersSide ? w.attacker : w.defender, 1, Integer::sum);
+    }
+
+    /** A deferred banner's chunk is live: the block goes up (logged for the restore) and the simulated fighters step out. */
+    private static void place(MinecraftServer server, NWSavedData data, War w, Siege s, ServerLevel level) {
+        BlockPos old = BlockPos.of(s.banner);
+        BlockPos at = new BlockPos(old.getX(), level.getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, old.getX(), old.getZ()), old.getZ());
+        data.restoreLog(w.id).record(level, at, level.getBlockState(at));
+        level.setBlockAndUpdate(at, NWRegistry.SIEGE_BANNER.get().defaultBlockState());
+        s.banner = at.asLong();
+        s.placed = true;
+        NpcService.materialize(server, w, s, level);
+        data.setDirty();
+    }
+
+    /** The bar reached an end: the chunk falls (or is freed), or the siege fails. */
+    private static void resolve(MinecraftServer server, NWSavedData data, War w, Siege s, ServerLevel level, boolean live) {
+        if (s.control < 1 && s.control > -1) return;
+        BlockPos banner = BlockPos.of(s.banner);
+        w.sieges.remove(s);
+        if (s.placed && live) level.setBlockAndUpdate(banner, Blocks.AIR.defaultBlockState());
         Town town = data.politics.towns.get(s.town);
-        if (s.control >= 1) {
-            w.sieges.remove(s);
-            level.setBlockAndUpdate(banner, Blocks.AIR.defaultBlockState());
-            if (town != null) {
-                w.occupied.computeIfAbsent(town.id, k -> new java.util.LinkedHashSet<>()).add(s.chunk);
-                w.score(s.byAttackers, NWConfig.get(NWConfig.CHUNK_POINTS));
-                boolean home = s.chunk == town.homeChunk;
-                if (home) w.coreOpen.add(town.id);
-                notifySides(server, w, Component.translatable(home ? "nationsandwar.notice.core_exposed" : "nationsandwar.notice.chunk_taken"),
-                        Component.literal(town.name), 0xFFAA00, home ? "skull" : "flag");
-                ApiEvents.queue(new WarEvent.ChunkTaken(server, w, town, s.chunk, s.byAttackers));
-                if (home) ApiEvents.queue(new WarEvent.CoreOpened(server, w, town, s.byAttackers));
+        if (s.control <= -1) {
+            notifySides(server, w, Component.translatable(s.liberation ? "nationsandwar.notice.liberation_failed" : "nationsandwar.notice.siege_failed"),
+                    Component.literal(town == null ? "?" : town.name), s.liberation ? 0xFF5555 : 0x55FF55, "shield");
+        } else if (town != null && s.liberation) {
+            Set<Long> occ = w.occupied.get(town.id);
+            if (occ != null) {
+                occ.remove(s.chunk);
+                if (occ.isEmpty()) w.occupied.remove(town.id);
             }
-            NW.changed(server);
-        } else if (s.control <= -1) {
-            w.sieges.remove(s);
-            level.setBlockAndUpdate(banner, Blocks.AIR.defaultBlockState());
-            notifySides(server, w, Component.translatable("nationsandwar.notice.siege_failed"), Component.literal(town == null ? "?" : town.name),
-                    0x55FF55, "shield");
-            NW.changed(server);
+            w.unscore(!s.byAttackers, NWConfig.get(NWConfig.CHUNK_POINTS));
+            boolean home = s.chunk == town.homeChunk;
+            if (home) {
+                w.coreOpen.remove(town.id);
+                w.coreDamage.remove(town.id);
+            }
+            notifySides(server, w, Component.translatable(home ? "nationsandwar.notice.core_secured" : "nationsandwar.notice.chunk_liberated"),
+                    Component.literal(town.name), 0x55FF55, home ? "shield" : "flag");
+            ApiEvents.queue(new WarEvent.ChunkLiberated(server, w, town, s.chunk, s.byAttackers));
+        } else if (town != null) {
+            w.occupied.computeIfAbsent(town.id, k -> new java.util.LinkedHashSet<>()).add(s.chunk);
+            w.score(s.byAttackers, NWConfig.get(NWConfig.CHUNK_POINTS));
+            boolean home = s.chunk == town.homeChunk;
+            if (home) w.coreOpen.add(town.id);
+            notifySides(server, w, Component.translatable(home ? "nationsandwar.notice.core_exposed" : "nationsandwar.notice.chunk_taken"),
+                    Component.literal(town.name), 0xFFAA00, home ? "skull" : "flag");
+            ApiEvents.queue(new WarEvent.ChunkTaken(server, w, town, s.chunk, s.byAttackers));
+            if (home) ApiEvents.queue(new WarEvent.CoreOpened(server, w, town, s.byAttackers));
+            if (live) NpcService.chunkTaken(server, w, s, level);
         }
+        NW.changed(server);
+    }
+
+    /**
+     * Unwatched wars: an open Core whose chunk is not live takes a hit a minute from its occupiers, unless its home chunk
+     * is being freed.
+     */
+    private static void simulateCores(MinecraftServer server, NWSavedData data, War w) {
+        if (!unattended(data.politics, w)) return;
+        for (UUID id : new ArrayList<>(w.coreOpen)) {
+            Town t = data.politics.towns.get(id);
+            ServerLevel level = t == null ? null : level(server, t.dimension);
+            if (level == null || t.nation == null || w.fallen.contains(id) || w.siegeAt(t.dimension, t.homeChunk) != null) continue;
+            BlockPos core = BlockPos.of(t.core);
+            if (level.isPositionEntityTicking(core)) continue;
+            Boolean owners = w.sideOf(t.nation);
+            if (owners == null) continue;
+            hitCore(level, core, owners ? w.defender : w.attacker);
+        }
+    }
+
+    private static ServerLevel level(MinecraftServer server, String dim) {
+        for (ServerLevel l : server.getAllLevels()) if (NW.dim(l).equals(dim)) return l;
+        return null;
     }
 
     @SubscribeEvent
@@ -514,6 +642,7 @@ public final class WarService {
         } else {
             Nation loser = pol.nations.get(w.loser());
             Nation winner = pol.nations.get(w.winner());
+            if (loser.npc) NpcCourt.onWarLost(server, loser);
             w.phase = War.Phase.TREATY;
             w.treatyUntil = now + NWConfig.minutes(NWConfig.TREATY_MINUTES);
             notifySides(server, w, Component.translatable("nationsandwar.notice.war_won"), Component.literal(winner == null ? "?" : winner.name),
@@ -613,7 +742,7 @@ public final class WarService {
         for (Siege s : w.sieges) {
             Nation b = pol.nations.get(s.byAttackers ? w.attacker : w.defender), d = pol.nations.get(s.byAttackers ? w.defender : w.attacker);
             out.add(new SiegeBrief(w.id, s.id, s.town, s.dimension, s.chunk, s.banner, s.control, b == null ? 0xFF5555 : b.color,
-                    d == null ? 0x5555FF : d.color, b == null ? "?" : b.name, d == null ? "?" : d.name));
+                    d == null ? 0x5555FF : d.color, b == null ? "?" : b.name, d == null ? "?" : d.name, s.liberation));
         }
         return out;
     }

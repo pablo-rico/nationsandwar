@@ -4,6 +4,6 @@
   "package": "org.papiricoh.nationsandwar.mixin.xaero",
   "plugin": "org.papiricoh.nationsandwar.mixin.xaero.XaeroMixinPlugin",
   "compatibilityLevel": "JAVA_21",
-  "client": ["WorldMapRegistryMixin", "MinimapRegistryMixin"],
+  "client": ["WorldMapRegistryMixin", "MinimapRegistryMixin", "WorldMapLabelsMixin"],
   "injectors": { "defaultRequire": 0 }
 }

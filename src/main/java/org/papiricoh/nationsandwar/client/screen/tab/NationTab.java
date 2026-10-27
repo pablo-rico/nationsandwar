@@ -1,26 +1,30 @@
 package org.papiricoh.nationsandwar.client.screen.tab;
 
 import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.network.chat.Component;
 import org.papiricoh.nationsandwar.client.gui.Draw;
 import org.papiricoh.nationsandwar.client.gui.Skins;
 import org.papiricoh.nationsandwar.client.gui.Ui;
 import org.papiricoh.nationsandwar.client.screen.NationScreen;
-import org.papiricoh.nationsandwar.model.GovernmentType;
+import org.papiricoh.nationsandwar.client.screen.modal.BankModal;
+import org.papiricoh.nationsandwar.client.screen.modal.ConfirmModal;
+import org.papiricoh.nationsandwar.client.screen.modal.GovernmentModal;
+import org.papiricoh.nationsandwar.client.screen.modal.NameColorModal;
+import org.papiricoh.nationsandwar.client.screen.modal.PickModal;
 import org.papiricoh.nationsandwar.model.Perm;
 import org.papiricoh.nationsandwar.view.PoliticsView;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 /**
- * My nation: facts, bank, name and colour (left); the government, which only renames the nation and its ranks (middle);
- * its towns with capital and kick buttons plus the free towns to invite, and its citizens (right).
+ * My nation: its card with the facts and the bank (left), its towns with capital and kick buttons (middle) and its
+ * citizens with their ranks (right). The action bar renames and recolours it, changes its government, opens the bank and
+ * invites a free town; leaving or deleting the nation asks first.
  */
 public final class NationTab extends Tab {
-    private EditBox amount, rename;
     private final Ui.Scroll towns = new Ui.Scroll(), citizens = new Ui.Scroll();
-    private boolean confirmDelete;
 
     public NationTab(NationScreen screen) {
         super(screen);
@@ -42,135 +46,124 @@ public final class NationTab extends Tab {
     }
 
     @Override
-    public void init() {
-        amount = field("amount", 7, tr("amount"), true);
-        rename = field("rename", 24, tr("new_name"), false);
-    }
-
-    @Override
     public void render(GuiGraphics g, PoliticsView v, float partial) {
         PoliticsView.NationView n = v.nation();
-        int colW = (w - 16) / 3;
-        info(g, v, n, x + 2, y + 2, colW);
-        government(g, v, n, x + 8 + colW, y + 2, colW);
-        members(g, v, n, x + 14 + 2 * colW, y + 2, w - 16 - 2 * colW);
+        int colW = (w - 16) / 3, ch = h - BAR - 4;
+        info(g, v, n, x + 2, y + 2, colW, ch);
+        townList(g, v, n, x + 8 + colW, y + 2, colW, ch);
+        citizenList(g, n, x + 14 + 2 * colW, y + 2, w - 16 - 2 * colW, ch);
+        actionBar(g, acts(v, n));
     }
 
-    private void info(GuiGraphics g, PoliticsView v, PoliticsView.NationView n, int cx, int cy, int cw) {
-        boolean leader = leads(n.roles(), v.me());
-        boolean mayor = v.town() != null && leads(v.town().roles(), v.me());
-        heading(g, Component.literal(n.name()).withStyle(s -> s.withColor(Draw.mix(Draw.opaque(n.color()), 0xFFFFFFFF, 0.3f) & 0xFFFFFF)), cx, cy, cw);
-        int sy = cy + 13;
-        GovernmentType gt = GovernmentType.byId(n.government());
-        sy = stat(g, tr("government"), Component.translatable(gt.key()), cx, sy, cw, Draw.TEXT);
-        sy = stat(g, Component.translatable("nationsandwar.info.capital"), Component.literal(townName(v, n.capital())), cx, sy, cw, Draw.TEXT);
-        sy = stat(g, Component.translatable("nationsandwar.info.towns"), Component.literal(String.valueOf(n.towns().size())), cx, sy, cw, Draw.TEXT);
-        sy = stat(g, Component.translatable("nationsandwar.info.citizens"), Component.literal(String.valueOf(n.citizens().size())), cx, sy, cw, Draw.TEXT);
+    private List<Act> acts(PoliticsView v, PoliticsView.NationView n) {
+        boolean leader = leads(n.roles(), v.me()), mayor = v.town() != null && leads(v.town().roles(), v.me());
+        Component leaderOnly = leader ? null : tr("leader_only");
+        List<Act> acts = new ArrayList<>();
+        acts.add(Act.modal(tr("identity"), leaderOnly, () -> new NameColorModal(tr("identity"), Draw.Icon.NATION, "nation.name." + n.id(), n.name(),
+                n.color(), tr("save"), null, (name, color) -> {
+            if (!name.equals(n.name())) act("nation.rename", "name", name);
+            if (color != (n.color() & 0xFFFFFF)) act("nation.color", "color", color);
+        })));
+        acts.add(Act.modal(tr("government"), null, () -> new GovernmentModal(false)));
+        acts.add(Act.modal(tr("bank"), null, () -> new BankModal(true)));
+        acts.add(Act.modal(tr("invite_town"), need(n.myPerms(), Perm.MANAGE_TOWNS), () -> new PickModal(tr("invite_town"), Draw.Icon.TOWN,
+                tr("invite_town_hint"), view -> {
+            List<PickModal.Row> rows = new ArrayList<>();
+            PoliticsView.NationView mine = view.nation();
+            if (mine == null) return rows;
+            for (PoliticsView.TownSummary t : view.towns()) {
+                if (t.nation() != null || t.npc()) continue;
+                boolean invited = mine.invitedTowns().contains(t.id());
+                rows.add(new PickModal.Row(t.id(), Component.literal(t.name()), tr("mayor_is", t.mayor()), t.color(), null, null, false,
+                        invited ? tr("invited") : null));
+            }
+            return rows;
+        }, tr("invite"), Ui.Style.GOOD, view -> view.nation() == null ? tr("no_nation") : need(view.nation().myPerms(), Perm.MANAGE_TOWNS),
+                (town, name) -> act("nation.invite", "town", town))));
+        if (leader) acts.add(Act.modal(tr("delete_nation"), Ui.Style.BAD, null, () -> new ConfirmModal(tr("delete_nation"),
+                tr("confirm_delete_nation", n.name()), tr("delete"), () -> act("nation.delete"))));
+        else acts.add(Act.modal(tr("leave_nation"), Ui.Style.BAD, mayor ? null : tr("mayor_only"), () -> new ConfirmModal(tr("leave_nation"),
+                tr("confirm_leave_nation", n.name()), tr("leave"), () -> act("nation.leave"))));
+        return acts;
+    }
+
+    private void info(GuiGraphics g, PoliticsView v, PoliticsView.NationView n, int cx, int cy, int cw, int ch) {
+        int by = card(g, cx, cy + 3, cw - 3, ch - 3, n.color(), Draw.Icon.NATION, Component.literal(n.name()));
+        int sx = cx + 6, sw = cw - 15, sy = by;
+        sy = stat(g, tr("government"), government(n.id(), n.government()), sx, sy, sw, Draw.TEXT);
+        sy = stat(g, Component.translatable(org.papiricoh.nationsandwar.client.ClientClaims.titles(n.id(), n.government()) + ".leader"), Component.literal(leaderName(n)), sx, sy, sw, Draw.TEXT);
+        sy = stat(g, Component.translatable("nationsandwar.info.capital"), Component.literal(townName(v, n.capital())), sx, sy, sw, Draw.TEXT);
+        sy = stat(g, Component.translatable("nationsandwar.info.towns"), Component.literal(String.valueOf(n.towns().size())), sx, sy, sw, Draw.TEXT);
+        sy = stat(g, Component.translatable("nationsandwar.info.citizens"), Component.literal(String.valueOf(n.citizens().size())), sx, sy, sw, Draw.TEXT);
+        sy = stat(g, Component.translatable("nationsandwar.gui.tab.provinces"), Component.literal(String.valueOf(n.provinces().size())), sx, sy, sw, Draw.TEXT);
         if (n.overlord() != null) {
             long days = Math.max(0, (n.vassalUntil() - v.now()) / 24000);
-            sy = stat(g, tr("overlord"), Component.literal(nationName(v, n.overlord()) + " (" + days + "d)"), cx, sy, cw, Draw.WARN);
+            sy = stat(g, tr("overlord"), Component.literal(nationName(v, n.overlord()) + " (" + days + "d)"), sx, sy, sw, Draw.WARN);
         }
-        sy = stat(g, Component.translatable("nationsandwar.info.bank"), money(n.bank()), cx, sy, cw, Draw.GOOD);
-        bank(g, amount, cx, sy + 1, cw, need(n.myPerms(), Perm.BANK_WITHDRAW), "nation.deposit", "nation.withdraw");
-        sy += 20;
-        heading(g, tr("identity"), cx, sy, cw);
-        sy += 13;
-        place(rename, cx, sy, cw - 50);
-        ui.button(g, cx + cw - 48, sy, 48, tr("rename"), !leader ? tr("leader_only") : rename.getValue().isBlank() ? tr("type_name") : null, () -> {
-            act("nation.rename", "name", rename.getValue().trim());
-            screen.clearField(rename);
-        });
-        sy += 17;
-        sy += palette(g, cx, sy, cw, n.color(), leader ? c -> act("nation.color", "color", c) : null) + 4;
-        if (leader) {
-            ui.button(g, cx, sy, cw, 13, confirmDelete ? tr("confirm_delete") : tr("delete_nation"), Ui.Style.BAD, null, () -> {
-                if (confirmDelete) act("nation.delete");
-                confirmDelete = !confirmDelete;
-            });
-        } else {
-            ui.button(g, cx, sy, cw, 13, tr("leave_nation"), Ui.Style.BAD, mayor ? null : tr("mayor_only"), () -> act("nation.leave"));
-        }
+        if (v.alliance() != null) sy = stat(g, tr("alliance"), Component.literal(v.alliance().name()), sx, sy, sw, Draw.TEXT);
+        int py = Math.max(sy + 4, cy + ch - 30);
+        Draw.slab(g, sx, py, sw, 24, 2, 0xFF3A3424, 0xFF262014);
+        Draw.frame(g, sx, py, sw, 24, Draw.alpha(Draw.GOLD, 0x60));
+        Draw.text(g, font, Component.translatable("nationsandwar.info.bank"), sx + 5, py + 4, 0.75f, Draw.MUTED, false);
+        Component bank = money(n.bank());
+        Draw.text(g, font, bank, sx + sw - 5 - font.width(bank) * 1.25f, py + 8, 1.25f, Draw.GOLD, true);
     }
 
-    private void government(GuiGraphics g, PoliticsView v, PoliticsView.NationView n, int cx, int cy, int cw) {
-        boolean leader = leads(n.roles(), v.me());
-        heading(g, tr("government"), cx, cy, cw);
-        int sy = cy + 13;
-        for (GovernmentType gt : GovernmentType.values()) {
-            boolean cur = gt.id().equals(n.government());
-            int rh = 24;
-            boolean hover = ui.over(cx, sy, cw, rh);
-            Draw.slab(g, cx, sy, cw - 3, rh - 3, 2, cur ? 0xFF3A3424 : hover && leader ? 0xFF2C3440 : 0xFF232A34, cur ? 0xFF2A2518 : 0xFF1A1F27);
-            if (cur) Draw.frame(g, cx, sy, cw - 3, rh - 3, Draw.GOLD);
-            g.drawString(font, Component.translatable(gt.key()), cx + 5, sy + 3, cur ? Draw.GOLD : Draw.TEXT, false);
-            Component titles = Component.translatable(gt.key("leader")).append(" · ").append(Component.translatable(gt.key("governor")));
-            Draw.text(g, font, Draw.fit(font, titles, (int) ((cw - 12) / 0.7f)), cx + 5, sy + 13, 0.7f, Draw.MUTED, false);
-            if (!cur && leader) ui.zone(cx, sy, cw - 3, rh - 3, () -> act("nation.gov", "gov", gt.id()));
-            else if (!cur) ui.tip(cx, sy, cw - 3, rh - 3, tr("leader_only"));
-            sy += rh + 1;
-        }
-        Draw.text(g, font, Draw.fit(font, tr("gov_hint"), (int) (cw / 0.6f)), cx, sy + 1, 0.6f, 0xFF6A7384, false);
+    private static String leaderName(PoliticsView.NationView n) {
+        for (PoliticsView.RoleView r : n.roles())
+            if (r.parent() < 0 && !r.holders().isEmpty())
+                for (PoliticsView.Member m : n.citizens()) if (m.id().equals(r.holders().getFirst())) return m.name();
+        return "—";
     }
 
-    private void members(GuiGraphics g, PoliticsView v, PoliticsView.NationView n, int cx, int cy, int cw) {
+    private void townList(GuiGraphics g, PoliticsView v, PoliticsView.NationView n, int cx, int cy, int cw, int ch) {
         boolean leader = leads(n.roles(), v.me());
         Component manage = need(n.myPerms(), Perm.MANAGE_TOWNS);
-        heading(g, Component.translatable("nationsandwar.info.towns"), cx, cy, cw);
-        int top = cy + 12, lh = (h - 30) / 2;
+        heading(g, Component.translatable("nationsandwar.info.towns").append(" · " + n.towns().size()), cx, cy, cw);
+        int top = cy + 13, lh = cy + ch - top;
         Draw.inset(g, cx, top, cw, lh);
-        int free = 0;
-        for (PoliticsView.TownSummary t : v.towns()) if (t.nation() == null && !t.npc()) free++;
-        towns.content = (n.towns().size() + free) * 13 + (free > 0 ? 12 : 0) + 2;
+        towns.content = n.towns().size() * 15 + 2;
         ui.scrollZone(cx, top, cw, lh, towns);
         ui.clip(g, cx + 1, top + 1, cw - 2, lh - 2);
         int ry = top + 2 - towns.offset;
         for (UUID t : n.towns()) {
             boolean capital = t.equals(n.capital());
             PoliticsView.TownSummary s = v.townSummary(t);
-            ui.row(g, cx + 1, ry, cw - 2, 12, false, null);
-            if (s != null) g.fill(cx + 3, ry + 3, cx + 7, ry + 7, Draw.opaque(s.color()));
-            g.drawString(font, Draw.fit(font, Component.literal((capital ? "★ " : "") + townName(v, t)), cw - 40), cx + 10, ry + 2, capital ? Draw.GOLD : Draw.TEXT, false);
+            ui.row(g, cx + 1, ry, cw - 2, 14, false, null);
+            if (s != null) g.fill(cx + 4, ry + 4, cx + 10, ry + 10, Draw.opaque(s.color()));
+            g.drawString(font, Draw.fit(font, Component.literal((capital ? "★ " : "") + townName(v, t)), cw - 44), cx + 14, ry + 3, capital ? Draw.GOLD : Draw.TEXT, false);
             if (!capital) {
-                ui.button(g, cx + cw - 28, ry + 1, 12, 10, Component.literal("★"), Ui.Style.GOLD, leader ? null : tr("leader_only"), () -> act("nation.capital", "town", t));
-                ui.button(g, cx + cw - 15, ry + 1, 12, 10, Component.literal("✕"), Ui.Style.BAD, manage, () -> act("nation.kick", "town", t));
+                ui.button(g, cx + cw - 30, ry + 2, 12, 10, Component.literal("★"), Ui.Style.GOLD, leader ? null : tr("leader_only"), () -> act("nation.capital", "town", t));
+                ui.tip(cx + cw - 30, ry + 2, 12, 10, tr("make_capital"));
+                ui.button(g, cx + cw - 16, ry + 2, 12, 10, Component.literal("✕"), Ui.Style.BAD, manage, confirm(tr("kick_town"),
+                        tr("confirm_kick_town", townName(v, t), n.name()), tr("kick"), () -> act("nation.kick", "town", t)));
             }
-            ry += 13;
-        }
-        if (free > 0) {
-            Draw.text(g, font, tr("invite_towns"), cx + 4, ry + 3, 0.75f, Draw.MUTED, false);
-            ry += 12;
-        }
-        for (PoliticsView.TownSummary t : v.towns()) {
-            if (t.nation() != null || t.npc()) continue;
-            boolean invited = n.invitedTowns().contains(t.id());
-            g.drawString(font, Draw.fit(font, Component.literal(t.name()), cw - 50), cx + 4, ry + 2, Draw.MUTED, false);
-            ui.button(g, cx + cw - 42, ry + 1, 39, 10, tr(invited ? "invited" : "invite"), Ui.Style.GOOD, invited ? tr("invited") : manage,
-                    () -> act("nation.invite", "town", t.id()));
-            ry += 13;
+            ry += 15;
         }
         ui.unclip(g);
         ui.scrollbar(g, cx + cw - 3, top + 1, lh - 2, towns);
+    }
 
-        int cy2 = top + lh + 4;
-        heading(g, Component.translatable("nationsandwar.info.citizens").append(" · " + n.citizens().size()), cx, cy2, cw);
-        int top2 = cy2 + 12, lh2 = y + h - top2 - 2;
-        Draw.inset(g, cx, top2, cw, lh2);
-        citizens.content = n.citizens().size() * 12 + 2;
-        ui.scrollZone(cx, top2, cw, lh2, citizens);
-        ui.clip(g, cx + 1, top2 + 1, cw - 2, lh2 - 2);
-        ry = top2 + 2 - citizens.offset;
+    private void citizenList(GuiGraphics g, PoliticsView.NationView n, int cx, int cy, int cw, int ch) {
+        heading(g, Component.translatable("nationsandwar.info.citizens").append(" · " + n.citizens().size()), cx, cy, cw);
+        int top = cy + 13, lh = cy + ch - top;
+        Draw.inset(g, cx, top, cw, lh);
+        citizens.content = n.citizens().size() * 13 + 2;
+        ui.scrollZone(cx, top, cw, lh, citizens);
+        ui.clip(g, cx + 1, top + 1, cw - 2, lh - 2);
+        int ry = top + 2 - citizens.offset;
         for (PoliticsView.Member m : n.citizens()) {
-            Skins.face(g, m.id(), m.name(), cx + 3, ry + 2, 8);
-            g.fill(cx + 13, ry + 8, cx + 16, ry + 11, m.online() ? Draw.GOOD : 0xFF555B66);
-            g.drawString(font, Draw.fit(font, Component.literal(m.name()), cw / 2), cx + 19, ry + 2, m.online() ? Draw.TEXT : Draw.MUTED, false);
+            Skins.face(g, m.id(), m.name(), cx + 3, ry + 2, 9);
+            g.fill(cx + 10, ry + 8, cx + 13, ry + 11, m.online() ? Draw.GOOD : 0xFF555B66);
+            g.drawString(font, Draw.fit(font, Component.literal(m.name()), cw / 2), cx + 16, ry + 3, m.online() ? Draw.TEXT : Draw.MUTED, false);
             for (PoliticsView.RoleView r : n.roles()) {
                 if (r.id() != m.role()) continue;
                 Component rn = Draw.fit(font, roleName(r.name()), (int) ((cw / 2 - 8) / 0.75f));
-                Draw.text(g, font, rn, cx + cw - 5 - font.width(rn) * 0.75f, ry + 3, 0.75f, Draw.mix(Draw.opaque(r.color()), 0xFFFFFFFF, 0.3f), false);
+                Draw.text(g, font, rn, cx + cw - 5 - font.width(rn) * 0.75f, ry + 3.5f, 0.75f, Draw.mix(Draw.opaque(r.color()), 0xFFFFFFFF, 0.3f), false);
             }
-            ry += 12;
+            ry += 13;
         }
         ui.unclip(g);
-        ui.scrollbar(g, cx + cw - 3, top2 + 1, lh2 - 2, citizens);
+        ui.scrollbar(g, cx + cw - 3, top + 1, lh - 2, citizens);
     }
 }

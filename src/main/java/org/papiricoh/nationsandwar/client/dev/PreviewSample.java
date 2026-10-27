@@ -54,6 +54,7 @@ public final class PreviewSample {
         Politics pol = data.politics;
         if (pol.townOf(player.getUUID()) != null) {
             seedManaged(player);
+            staffCourts(server);
             return;
         }
         ServerLevel level = player.serverLevel();
@@ -173,6 +174,16 @@ public final class PreviewSample {
         level.setBlockAndUpdate(base.offset(1, 0, -2), NWRegistry.SIEGE_BANNER.get().defaultBlockState());
         org.papiricoh.nationsandwar.NationsAndWar.LOGGER.info("[preview] showcase at {} core={} banner={}", base,
                 level.getBlockState(base.offset(-1, 0, -2)), level.getBlockState(base.offset(1, 0, -2)));
+    }
+
+    /** Gives the NPC nations and towns of worlds seeded before the courts (v0.4) their characters at once. */
+    private static void staffCourts(MinecraftServer server) {
+        Politics pol = NW.pol(server);
+        java.util.Random r = new java.util.Random(7);
+        long now = server.overworld().getGameTime();
+        for (Nation n : java.util.List.copyOf(pol.nations.values())) org.papiricoh.nationsandwar.npc.NpcCourt.staff(pol, n, r, now);
+        for (Town t : java.util.List.copyOf(pol.towns.values())) org.papiricoh.nationsandwar.npc.NpcCourt.staff(pol, t, r, now);
+        NW.changed(server);
     }
 
     /** An envoy of the NPC nation at war with the player's (else any NPC nation) in front of the player, talked to at once. */
