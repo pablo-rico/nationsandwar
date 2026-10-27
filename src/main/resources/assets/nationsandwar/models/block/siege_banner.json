@@ -1,0 +1,15 @@
+{
+  "parent": "block/block",
+  "ambientocclusion": false,
+  "textures": { "particle": "nationsandwar:block/siege_banner", "t": "nationsandwar:block/siege_banner" },
+  "elements": [
+    { "from": [7, 0, 7], "to": [9, 16, 9],
+      "faces": { "north": { "uv": [0, 0, 2, 16], "texture": "#t" }, "south": { "uv": [0, 0, 2, 16], "texture": "#t" },
+                 "west": { "uv": [0, 0, 2, 16], "texture": "#t" }, "east": { "uv": [0, 0, 2, 16], "texture": "#t" },
+                 "up": { "uv": [2, 12, 4, 14], "texture": "#t" }, "down": { "uv": [0, 0, 2, 2], "texture": "#t", "cullface": "down" } } },
+    { "from": [9, 5, 7.75], "to": [16, 16, 8.25],
+      "faces": { "north": { "uv": [9, 0, 2, 11], "texture": "#t" }, "south": { "uv": [2, 0, 9, 11], "texture": "#t" },
+                 "east": { "uv": [15, 0, 16, 11], "texture": "#t" }, "up": { "uv": [2, 12, 9, 13], "texture": "#t" },
+                 "down": { "uv": [2, 12, 9, 13], "texture": "#t" } } }
+  ]
+}

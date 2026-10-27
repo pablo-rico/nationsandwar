@@ -1,0 +1,9 @@
+{
+  "required": false,
+  "minVersion": "0.8",
+  "package": "org.papiricoh.nationsandwar.mixin.xaero",
+  "plugin": "org.papiricoh.nationsandwar.mixin.xaero.XaeroMixinPlugin",
+  "compatibilityLevel": "JAVA_21",
+  "client": ["WorldMapRegistryMixin", "MinimapRegistryMixin"],
+  "injectors": { "defaultRequire": 0 }
+}

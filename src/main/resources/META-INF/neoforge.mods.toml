@@ -1,0 +1,55 @@
+modLoader="javafml"
+loaderVersion="${loader_version_range}"
+license="${mod_license}"
+
+[[mods]]
+modId="${mod_id}"
+version="${mod_version}"
+displayName="${mod_name}"
+authors="${mod_authors}"
+description='''${mod_description}'''
+
+[[mixins]]
+config="nationsandwar.mixins.json"
+
+# Xaero's highlighter registries (applied only when the maps are installed).
+[[mixins]]
+config="nationsandwar.xaero.mixins.json"
+
+[[dependencies."${mod_id}"]]
+modId="neoforge"
+type="required"
+versionRange="${neoforge_version_range}"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies."${mod_id}"]]
+modId="minecraft"
+type="required"
+versionRange="${minecraft_version_range}"
+ordering="NONE"
+side="BOTH"
+
+# Claims, wars and sieges drawn on the map (compat/journeymap).
+[[dependencies."${mod_id}"]]
+modId="journeymap"
+type="optional"
+# JourneyMap's versions look like "1.21.1-6.0.9" (they sort by the Minecraft part), so any version is accepted.
+versionRange="*"
+ordering="AFTER"
+side="CLIENT"
+
+# Claims, wars and sieges drawn on the world map and the minimap (compat/xaero).
+[[dependencies."${mod_id}"]]
+modId="xaeroworldmap"
+type="optional"
+versionRange="*"
+ordering="AFTER"
+side="CLIENT"
+
+[[dependencies."${mod_id}"]]
+modId="xaerominimap"
+type="optional"
+versionRange="*"
+ordering="AFTER"
+side="CLIENT"

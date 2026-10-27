@@ -1,0 +1,76 @@
+# Builds and publishes a release whenever mod_version in gradle.properties names a version that has no tag yet.
+# Every push to master/main is checked: an unchanged version stops after the first step.
+name: Release
+
+on:
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read the version
+        id: version
+        run: |
+          version=$(grep -E '^mod_version=' gradle.properties | cut -d= -f2 | tr -d '[:space:]')
+          mc=$(grep -E '^minecraft_version=' gradle.properties | cut -d= -f2 | tr -d '[:space:]')
+          tag="v${version}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "jar=build/libs/nationsandwar_${mc}_${version}.jar" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+            echo "Tag ${tag} already exists: nothing to release."
+            echo "new=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "New version ${version}: building a release."
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-java@v4
+        if: steps.version.outputs.new == 'true'
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v4
+        if: steps.version.outputs.new == 'true'
+
+      - name: Build (compile + JUnit)
+        if: steps.version.outputs.new == 'true'
+        run: |
+          chmod +x gradlew
+          ./gradlew build --no-daemon
+
+      - name: GameTests
+        if: steps.version.outputs.new == 'true'
+        run: |
+          ./gradlew runGameTestServer --no-daemon 2>&1 | tee gametest.log
+          grep -q "required tests passed" gametest.log
+
+      - name: Check the jar
+        if: steps.version.outputs.new == 'true'
+        run: test -f "${{ steps.version.outputs.jar }}"
+
+      - name: Tag and release
+        if: steps.version.outputs.new == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Nations & War ${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          files: ${{ steps.version.outputs.jar }}
+          fail_on_unmatched_files: true

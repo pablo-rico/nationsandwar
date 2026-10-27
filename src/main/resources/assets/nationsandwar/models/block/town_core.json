@@ -1,0 +1,10 @@
+{
+  "parent": "block/block",
+  "textures": { "particle": "nationsandwar:block/town_core_side", "side": "nationsandwar:block/town_core_side", "top": "nationsandwar:block/town_core_top" },
+  "elements": [
+    { "from": [2, 0, 2], "to": [14, 16, 14],
+      "faces": {
+        "down": { "texture": "#top", "cullface": "down" }, "up": { "texture": "#top" },
+        "north": { "texture": "#side" }, "south": { "texture": "#side" }, "west": { "texture": "#side" }, "east": { "texture": "#side" } } }
+  ]
+}

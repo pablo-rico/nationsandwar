@@ -1,0 +1,95 @@
+# Nations & War: technical guide
+
+A Towny-style countries-and-war mod for **NeoForge 1.21.1** (Java 21, NeoForge 21.1.221, NeoGradle userdev 7.0.x).
+- Package `org.papiricoh.nationsandwar`, mod id `nationsandwar`.
+- No required dependencies.
+- **JourneyMap** and **Xaero's World Map / Minimap** are optional, and only `compat/` imports their APIs.
+
+Code, comments and identifiers are written **in English**. The game ships in **English and Spanish**. Talk to the user in Spanish.
+
+## Working rules
+
+- **Do not commit** unless the user explicitly asks.
+- Ask the user about design decisions for new content (they like being asked, in rounds of questions).
+- The user watches token spend closely:
+  - **At most one agent in parallel** besides yourself.
+  - Brief agents with `docs/CONTRACT.md` instead of having them re-read the server.
+  - Cap their preview rounds.
+- Every change must leave these green:
+  - `./gradlew build` (compile + 28 JUnit tests).
+  - `./gradlew runGameTestServer` (6 GameTests).
+  - Run only one Gradle at a time.
+- Look at the result in the game (preview harness, below) before saying something "looks right".
+
+## Map of the code
+
+| package | what it holds |
+|---|---|
+| `model/` | **Pure** rules and data: `Politics` (every town/province/nation/alliance, claim index, all political actions → `Result`), `Town`, `Province`, `Nation`, `Alliance`, `RoleTree`/`Role`/`Perm`, `ChunkPerms`, `Flag`, `TownLevel`, `GovernmentType` (names only), `Rules` (numbers from the config). NBT in each class. |
+| `data/NWSavedData` | Everything persistent (overworld): politics, wars + `RestoreLog`, war cooldowns, villages already reviewed. |
+| `core/` | MC-side glue: `Actions` (**single dispatcher** for commands and the GUI: `run(player, "town.claim", nbt)`), `Sync` (claims full/diff, briefs, per-player view, membership; batched per tick), `ViewBuilder`, `NW` (shortcuts, `NW.changed(server)` = save + sync), `Emeralds`, `Notices`. |
+| `claim/ProtectionEvents` | Protection by group/action and flags, pistons, explosions, war zone (logs to `RestoreLog`, no drops). Fire is in `mixin/FireBlockMixin`. |
+| `war/` | `War`, `Siege`, `Treaty`, `RestoreLog` (data); `WarRules`, `SiegeControl` (pure); `WarService` (declaring, ticks, banners, Core, ending, treaty); the Town Core and Siege Banner blocks. |
+| `npc/` | `NpcService` (village adoption, guards/envoys, brain, war parties, envoy diplomacy), `FactionBrain` (pure), `NameGen`, `GuardEntity`, `EnvoyEntity`. |
+| `command/NWCommands` | `/town /province /nation /alliance /war /nw /nwadmin`; they only build NBT for `Actions`. |
+| `network/` | Payloads (`ActionPayload` C2S; `ClaimsPayload`, `BriefsPayload`, `SiegesPayload`, `SelfPayload`, `ViewPayload`, `NoticePayload`, `OpenScreenPayload` S2C). `NWNetwork` references client classes **only inside lambdas**. |
+| `view/` | Records shared server↔client (`Briefs`, `SiegeBrief`, `PoliticsView`) with their NBT. |
+| `client/` | Mirrors `ClientClaims` / `ClientPolitics`; `screen/` (management GUI with tabs, `tab/RoleTree` 2.5D tree), `gui/` (`Draw`, `Ui`, `Skins`), `notice/` (cards at top centre, `TerritoryWatcher`, `SiegePanel`), `render/` (guard/envoy + tinted `TabardLayer`), `dev/` (preview harness). |
+| `compat/` | `MapStyle` (shared colours/states), `journeymap/NWJourneyMapPlugin` (`PolygonOverlay`s), `xaero/` (highlighters injected by `mixin/xaero/*`). |
+
+## How to add things
+
+- **A new political action**:
+  1. Write the rule in `Politics` (or `WarService`/`NpcService`) returning a `Result`.
+  2. Add the `case` to `core/Actions.dispatch`.
+  3. Add the command in `NWCommands`.
+  4. Add the row to `docs/CONTRACT.md`.
+  5. Add `nationsandwar.msg.<key>` in EN+ES.
+  - Permissions are always checked on the server.
+- **Anything that changes politics** calls `NW.changed(server)`. Without it, clients and maps are not refreshed.
+- **Text**: every key lives in `tools/lang/genlang.py` (EN, ES). Run `python3 tools/lang/genlang.py`. **Never** edit the lang JSON files by hand.
+  - Role names starting with `@` are lang keys; renamed roles keep the literal text.
+- **Art**: pure-Python generators (`tools/artgen/`: `nwart.py` for entities/blocks/items, `guiart.py`, `noticeart.py`). Never download assets.
+- **Server config**: `NWConfig` (reads guarded by `SPEC.isLoaded()`).
+  - If you change defaults, delete `runs/*/config/nationsandwar-*.toml`; the old values stay and break tests.
+  - The client has `NWClientConfig` (map, notices: `topCenter`, `scale` 0.5 by default, `topOffset`…).
+
+## Tests
+
+- **JUnit** (`src/test`): only pure logic (`model`, `war` rules, `FactionBrain`). `CompoundTag` and `ChunkPos` are fine; registries are not.
+- **GameTests** (`gametest/NWGameTests`, template `gametest/empty_48x24x48`), one `batch` per test. Known traps:
+  - Structures can come **rotated**: use **absolute** positions (`sameChunk`), never `relativePos` round trips.
+  - `FakePlayer`s are not "online" (`NW.online` = false) and do not show up in `getEntitiesOfClass`. Sieges are pushed with a `GuardEntity` (`setNoAi`).
+  - Test towns are called "Gt …" and `purge` deletes them at the start. A failure no longer chains into `name_taken`.
+  - If a test changes config with `.set()`, it restores it at the end.
+
+## Seeing it in the game
+
+`NW_PREVIEW=<scenes> ./gradlew runClient -Ppreview [-Pjm] [-Pxaero]`
+- Opens `runs/client/saves/nw_preview`. If it is missing, copy `runs/gameTestServer/world`.
+- Seeds sample data once (`client/dev/PreviewSample`).
+- Saves `runs/client/screenshots/nw_<scene>.png` and quits.
+- Scenes: `gui:<tab>` (overview, town, provinces, nation, roles, nationroles, diplomacy, war, map; `roles.1` = page of the inspector), `envoy`, `treaty` (ends the war, run it last), `notices`, `siegehud`, `showcase`, `world`.
+- The system `screencapture` does not work: use this.
+- `-Pjm` / `-Pxaero` load JourneyMap / Xaero's in the dev client.
+
+## Compatibility traps
+
+- JourneyMap uses versions like `1.21.1-6.0.9`: in `neoforge.mods.toml` its range must be `"*"`; a range like `[6,)` breaks loading.
+- JourneyMap's `UIState.displayBounds` are not reliable.
+  - The notices go at the top centre, below the boss bars. They drop below vanilla toasts if they would reach them.
+  - With `topCenter=false`, `topOffset` / auto-reserve avoids JM's minimap.
+- Xaero publishes no API. `WorldMapClaims`/`MinimapClaims` register through a mixin on `HighlighterRegistry.end()` (config `nationsandwar.xaero.mixins.json` + `XaeroMixinPlugin`).
+  - The Minimap one only applies without the World Map installed.
+  - Xaero colours are BGRA.
+- Dedicated server: it must never load `client/` classes (check with `./gradlew runServer`).
+
+## Versions and releases
+
+- The version is `mod_version` in `gradle.properties`.
+- `.github/workflows/release.yml` runs on every push to `master`/`main`. If tag `v<mod_version>` does not exist yet, it:
+  1. builds and runs JUnit;
+  2. runs the GameTests;
+  3. creates the tag and the GitHub release with `build/libs/nationsandwar_<mc>_<version>.jar` and auto-generated notes.
+- To publish, bump `mod_version` and push. If the version did not change, the workflow does nothing.
+- It can also be launched by hand (`workflow_dispatch`).

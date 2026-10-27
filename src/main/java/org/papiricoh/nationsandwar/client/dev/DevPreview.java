@@ -1,0 +1,140 @@
+package org.papiricoh.nationsandwar.client.dev;
+
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.Screenshot;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerPlayer;
+import net.neoforged.api.distmarker.Dist;
+import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.neoforge.client.event.ClientTickEvent;
+import org.papiricoh.nationsandwar.NationsAndWar;
+import org.papiricoh.nationsandwar.client.ClientPolitics;
+import org.papiricoh.nationsandwar.client.notice.NoticeHud;
+import org.papiricoh.nationsandwar.client.screen.NationScreen;
+import org.papiricoh.nationsandwar.network.NoticePayload;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
+
+/**
+ * Development aid, inert unless {@code NW_PREVIEW} is set: {@code NW_PREVIEW=gui,notices ./gradlew runClient -Ppreview}
+ * (world {@code runs/client/saves/nw_preview}, e.g. a copy of {@code runs/gameTestServer/world}). Seeds sample politics
+ * ({@link PreviewSample}), plays each named scene, saves {@code runs/client/screenshots/nw_<scene>.png} and quits.
+ * Scenes are registered in {@link #SCENES}; add your own with {@link #scene}. {@code gui:<tab>} opens the management GUI on a
+ * tab; {@code envoy} talks to the enemy NPC nation's envoy; {@code treaty} ends the sample war in Valoria's favour (it changes
+ * the world, so play it last); {@code notices} shows one notice of each kind plus a territory change and {@code siegehud}
+ * the siege panel by the sample siege.
+ */
+@EventBusSubscriber(modid = NationsAndWar.MODID, value = Dist.CLIENT)
+public final class DevPreview {
+    /**
+     * A scene: {@code server} runs on the server thread first (the local player), then {@code screen} opens (null keeps
+     * the world view, e.g. for HUD notices), {@code client} runs, and after {@code settle} ticks the screenshot is taken.
+     */
+    public record Scene(Consumer<ServerPlayer> server, Supplier<Screen> screen, Runnable client, int settle, boolean hud) {
+    }
+
+    public static final Map<String, Scene> SCENES = new LinkedHashMap<>();
+
+    static {
+        scene("gui", new Scene(p -> {
+        }, () -> new NationScreen(arg().split("\\.")[0]), DevPreview::guiPage, 60, false));
+        scene("envoy", new Scene(PreviewSample::envoy, () -> null, () -> {
+        }, 70, false));
+        scene("treaty", new Scene(PreviewSample::treaty, () -> new NationScreen("war"), () -> {
+        }, 60, false));
+        scene("world", new Scene(p -> {
+        }, () -> null, () -> {
+        }, 60, true));
+        scene("showcase", new Scene(PreviewSample::showcase, () -> null, () -> {
+        }, 80, false));
+        scene("notices", new Scene(PreviewSample::toAshdale, () -> null, DevPreview::notices, 30, true));
+        scene("siegehud", new Scene(PreviewSample::toSiege, () -> null, NoticeHud::clear, 45, true));
+    }
+
+    /** One notice of each server kind (the walk to Ashdale adds the territory one), on a cleared stack. */
+    private static void notices() {
+        NoticeHud.clear();
+        NoticeHud.push(NoticePayload.Kind.WAR, Component.translatable("nationsandwar.notice.war_declared"),
+                Component.translatable("nationsandwar.notice.vs", "Dravenholt", "Valoria"), 0xC8373B, "war");
+        NoticeHud.push(NoticePayload.Kind.POLITICS, Component.translatable("nationsandwar.notice.governor"), Component.literal("North March"), 0xD9A43A, "crown");
+        NoticeHud.push(NoticePayload.Kind.PERMISSION, Component.translatable("nationsandwar.notice.denied.build"), Component.literal("Calmere"), 0x3F9E4F, "shield");
+    }
+
+    /** For {@code gui:roles.1} / {@code gui:nationroles.2}: opens that page (0 rank, 1 rights, 2 people) of the rank inspector. */
+    private static void guiPage() {
+        String[] parts = arg().split("\\.");
+        if (parts.length > 1 && Minecraft.getInstance().screen instanceof NationScreen s && s.current() instanceof org.papiricoh.nationsandwar.client.screen.tab.RolesTab r)
+            r.page(Integer.parseInt(parts[1]));
+    }
+
+    public static void scene(String name, Scene scene) {
+        SCENES.put(name, scene);
+    }
+
+    private static final String RAW = System.getenv("NW_PREVIEW");
+    private static List<String> queue;
+    private static int warmup = 120, timer = -1, index;
+    private static boolean seeded;
+    private static String arg = "";
+
+    /** The text after ':' in the current scene's name ({@code gui:roles} → "roles"), or "". */
+    public static String arg() {
+        return arg;
+    }
+
+    private DevPreview() {
+    }
+
+    @SubscribeEvent
+    public static void tick(ClientTickEvent.Post event) {
+        if (RAW == null) return;
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level == null || mc.player == null || mc.getSingleplayerServer() == null) return;
+        mc.options.pauseOnLostFocus = false;
+        if (queue == null) {
+            queue = new ArrayList<>();
+            for (String s : RAW.split(",")) if (!s.isBlank()) queue.add(s.trim());
+        }
+        if (!seeded) {
+            seeded = true;
+            var server = mc.getSingleplayerServer();
+            server.execute(() -> PreviewSample.seed(server.getPlayerList().getPlayers().getFirst()));
+        }
+        if (warmup-- > 0) return;
+        if (index >= queue.size()) {
+            mc.stop();
+            return;
+        }
+        String name = queue.get(index);
+        Scene scene = SCENES.get(name.contains(":") ? name.substring(0, name.indexOf(':')) : name);
+        if (scene == null) {
+            NationsAndWar.LOGGER.warn("[preview] unknown scene {}", name);
+            index++;
+            return;
+        }
+        if (timer < 0) {
+            arg = name.contains(":") ? name.substring(name.indexOf(':') + 1) : "";
+            timer = scene.settle();
+            var server = mc.getSingleplayerServer();
+            server.execute(() -> scene.server().accept(server.getPlayerList().getPlayers().getFirst()));
+            ClientPolitics.requestView();
+            mc.options.hideGui = !scene.hud();
+            Screen s = scene.screen().get();
+            mc.setScreen(s);
+            scene.client().run();
+            return;
+        }
+        if (--timer > 0) return;
+        String file = "nw_" + name.replace(':', '_') + ".png";
+        Screenshot.grab(mc.gameDirectory, file, mc.getMainRenderTarget(), msg -> NationsAndWar.LOGGER.info("[preview] {}", msg.getString()));
+        timer = -1;
+        index++;
+    }
+}

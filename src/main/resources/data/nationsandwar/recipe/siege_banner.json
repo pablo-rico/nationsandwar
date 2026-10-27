@@ -1,0 +1,7 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": ["GWG", "WEW", " S "],
+  "key": { "G": { "item": "minecraft:gold_ingot" }, "W": { "item": "minecraft:red_wool" }, "E": { "item": "minecraft:emerald_block" }, "S": { "item": "minecraft:stick" } },
+  "result": { "id": "nationsandwar:siege_banner", "count": 1 }
+}
