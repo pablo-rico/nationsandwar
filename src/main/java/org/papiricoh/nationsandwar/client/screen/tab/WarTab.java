@@ -190,7 +190,7 @@ public final class WarTab extends Tab {
     /** A siege's control: the besieger's colour grows from the right as control goes to +1. */
     private static void control(GuiGraphics g, int cx, int cy, int cw, SiegeBrief s) {
         g.fill(cx, cy, cx + cw, cy + 6, 0xFF0A0C10);
-        int mid = cx + cw / 2, at = mid + Math.round((cw / 2f - 1) * s.control());
+        int mid = cx + cw / 2, at = mid - Math.round((cw / 2f - 1) * s.control());
         g.fill(cx + 1, cy + 1, at, cy + 5, Draw.opaque(Draw.shade(s.defenderColor(), 0.9f)));
         g.fill(at, cy + 1, cx + cw - 1, cy + 5, Draw.opaque(s.besiegerColor()));
         g.fill(mid, cy - 1, mid + 1, cy + 7, 0xFFFFFFFF);

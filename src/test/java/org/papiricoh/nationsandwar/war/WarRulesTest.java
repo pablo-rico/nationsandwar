@@ -17,8 +17,9 @@ class WarRulesTest {
         assertEquals(0.03f, SiegeControl.step(0, 5, 2, 0.01f, 0.002f), 1e-6, "edge of 3");
         assertEquals(0.03f, SiegeControl.step(0, 9, 0, 0.01f, 0.002f), 1e-6, "capped at 3");
         assertEquals(-0.01f, SiegeControl.step(0, 1, 2, 0.01f, 0.002f), 1e-6);
-        assertEquals(0.498f, SiegeControl.step(0.5f, 0, 0, 0.01f, 0.002f), 1e-6, "empty field decays");
-        assertEquals(0f, SiegeControl.step(0.001f, 0, 0, 0.01f, 0.002f), 1e-6);
+        assertEquals(0.498f, SiegeControl.step(0.5f, 0, 0, 0.01f, 0.002f), 1e-6, "an abandoned banner slips toward the holders");
+        assertEquals(-0.502f, SiegeControl.step(-0.5f, 0, 0, 0.01f, 0.002f), 1e-6, "past the middle too, never back to it");
+        assertEquals(-1f, SiegeControl.step(-0.999f, 0, 0, 0.01f, 0.002f), 1e-6, "until the siege fails");
         assertEquals(1f, SiegeControl.step(0.99f, 3, 0, 0.01f, 0.002f), 1e-6, "clamped");
         assertEquals(100, SiegeControl.secondsAlone(0.01f));
     }

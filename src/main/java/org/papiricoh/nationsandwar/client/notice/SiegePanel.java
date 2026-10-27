@@ -77,7 +77,8 @@ final class SiegePanel {
                 town != null ? town.name() : s.defender());
         g.drawString(font, Draw.fit(font, title, bw - pw - 4), tx, 5, NoticeHud.fade(Draw.TEXT, a), false);
         g.drawString(font, pctText, W - 6 - pw, 5, NoticeHud.fade(Draw.mix(s.control() > 0 ? besieger : defender, 0xFFFFFFFF, 0.3f), a), false);
-        int by = 16, mid = tx + bw / 2, at = mid + Math.round((bw / 2f - 1) * Math.clamp(s.control(), -1, 1));
+        // A tug of war: the side that is winning pushes its colour over the middle (besiegers from the right at +1).
+        int by = 16, mid = tx + bw / 2, at = mid - Math.round((bw / 2f - 1) * Math.clamp(s.control(), -1, 1));
         g.fill(tx, by, tx + bw, by + 6, NoticeHud.fade(0xFF0A0C10, a));
         g.fillGradient(tx + 1, by + 1, at, by + 5, NoticeHud.fade(Draw.mix(defender, 0xFFFFFFFF, 0.2f), a), NoticeHud.fade(Draw.shade(defender, 0.75f), a));
         g.fillGradient(at, by + 1, tx + bw - 1, by + 5, NoticeHud.fade(Draw.mix(besieger, 0xFFFFFFFF, 0.2f), a), NoticeHud.fade(Draw.shade(besieger, 0.75f), a));

@@ -81,6 +81,9 @@ Code, comments and identifiers are written **in English**. The game ships in **E
 ## NPC traps
 
 - Role holders, `Nation.leader()` and `Town.mayor()` may be a court character (`Politics.persona(id)` != null), never a player. Never look up a Mojang profile for one.
+- A banner with no besieger near slips toward the holders at `controlDecay` and the siege fails at −1 (`SiegeControl`): an
+  abandoned banner never stays forever. `siegeTakesChunkCoreTownAndRestores` has failed once at control 0.49 and passed on
+  re-runs (flaky).
 - NPC sieges in unloaded chunks start without a block (`Siege.placed` false). They run on `WarSim` only while every nation in the war is NPC or managed; a war with players pauses them. The banner is placed when the chunk goes live.
 
 ## Compatibility traps

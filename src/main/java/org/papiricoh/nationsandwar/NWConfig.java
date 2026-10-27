@@ -50,7 +50,7 @@ public final class NWConfig {
                 .defineInRange("minDefendersOnline", 1, 0, 100);
         SIEGE_RADIUS = B.comment("Blocks around a Siege Banner where fighters push its control bar.").defineInRange("siegeRadius", 12, 2, 64);
         CONTROL_RATE = B.comment("Control gained per second per extra fighter (1.0 = full bar).").defineInRange("controlRate", 0.01, 0.0001, 1.0);
-        CONTROL_DECAY = B.comment("Control lost per second toward zero when nobody is near.").defineInRange("controlDecay", 0.002, 0.0, 1.0);
+        CONTROL_DECAY = B.comment("Control lost per second toward the holders while no besieger is near (at -1 the siege fails).").defineInRange("controlDecay", 0.002, 0.0, 1.0);
         MAX_SIEGES = B.comment("Sieges a side may run at once in one war.").defineInRange("maxSieges", 3, 1, 32);
         CORE_HITS = B.comment("Times a Town Core must be broken, once its home chunk has fallen, to take the town.").defineInRange("coreHits", 8, 1, 1000);
         TREATY_MINUTES = B.comment("Minutes the winner has to dictate the treaty before its default terms apply.").defineInRange("treatyMinutes", 5, 0, 1440);
